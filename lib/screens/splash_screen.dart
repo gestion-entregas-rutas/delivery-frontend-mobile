@@ -3,11 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'animated_route.dart';
+import '../auth/auth_controller.dart';
 import 'home_screen.dart' show AppColors, kAppName;
 import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+  const SplashScreen({super.key, this.auth, this.hold = false});
+
+  final AuthController? auth;
+  final bool hold;
   @override
   State<SplashScreen> createState() => _SplashScreenState();
 }
@@ -19,13 +23,14 @@ class _SplashScreenState extends State<SplashScreen> {
     super.initState();
     _timer = Timer(const Duration(milliseconds: 1800), () {
       if (!mounted) return;
+      if (widget.hold) return;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder<void>(
           transitionDuration: Duration(
             milliseconds: MediaQuery.disableAnimationsOf(context) ? 0 : 450,
           ),
           pageBuilder: (_, animation, secondaryAnimation) =>
-              const LoginScreen(),
+              LoginScreen(auth: widget.auth),
           transitionsBuilder: (_, animation, secondaryAnimation, child) =>
               FadeTransition(opacity: animation, child: child),
         ),

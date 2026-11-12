@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../auth/auth_controller.dart';
+import '../config/api_config.dart';
+import '../data/api/api_client.dart';
 import 'animated_route.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.auth});
+
+  final AuthController? auth;
+
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -13,25 +19,54 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _user = TextEditingController();
   final _password = TextEditingController();
+  late final AuthController _auth;
+  late final bool _ownsAuth;
   bool _obscure = true;
   bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.auth != null) {
+      _auth = widget.auth!;
+      _ownsAuth = false;
+    } else {
+      late AuthController controller;
+      final api = ApiClient(
+        baseUrl: ApiConfig.baseUrl,
+        accessTokenProvider: () => controller.accessToken,
+        onUnauthorized: (token) => controller.handleUnauthorized(token),
+      );
+      controller = AuthController(api: api);
+      _auth = controller;
+      _ownsAuth = true;
+    }
+  }
+
   @override
   void dispose() {
     _user.dispose();
     _password.dispose();
+    if (_ownsAuth) {
+      _auth.dispose();
+      _auth.api.close();
+    }
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _continue() async {
     if (_loading || !_formKey.currentState!.validate()) return;
     FocusScope.of(context).unfocus();
     setState(() => _loading = true);
-    // Demo only: replace with the central authentication service.
-    await Future<void>.delayed(const Duration(milliseconds: 900));
+    final password = _password.text;
+    await _auth.login(username: _user.text, password: password);
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const HomeScreen()),
-    );
+    _password.clear();
+    setState(() => _loading = false);
+    if (_auth.error != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(_auth.error!.message)));
+    }
   }
 
   void _help() => showModalBottomSheet<void>(
@@ -47,18 +82,19 @@ class _LoginScreenState extends State<LoginScreen> {
             Icon(Icons.support_agent_rounded, size: 36),
             SizedBox(height: 16),
             Text(
-              'Te ayudamos a volver a tu ruta',
+              '¿Necesitas acceso?',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),
             SizedBox(height: 12),
             Text(
-              'Contacta al administrador de tu negocio para recuperar tu acceso o solicitar una cuenta de conductor.',
+              'Solicita al administrador de tu negocio las credenciales de conductor. La aplicación no crea cuentas ni almacena tu contraseña.',
             ),
           ],
         ),
       ),
     ),
   );
+
   InputDecoration _decoration(String label, IconData icon, {Widget? suffix}) =>
       InputDecoration(
         labelText: label,
@@ -72,6 +108,7 @@ class _LoginScreenState extends State<LoginScreen> {
           borderSide: const BorderSide(color: AppColors.ink, width: 1.5),
         ),
       );
+
   @override
   Widget build(BuildContext context) {
     final keyboard = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -128,166 +165,153 @@ class _LoginScreenState extends State<LoginScreen> {
                           top: Radius.circular(36),
                         ),
                       ),
-                      child: AutofillGroup(
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'TU DÍA, EN MARCHA',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  letterSpacing: 2,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF666A56),
-                                ),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'ACCESO DEL REPARTIDOR',
+                              style: TextStyle(
+                                fontSize: 11,
+                                letterSpacing: 2,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF666A56),
                               ),
-                              const SizedBox(height: 10),
-                              const Text(
-                                'Cada entrega\nempieza contigo.',
-                                style: TextStyle(
-                                  fontSize: 32,
-                                  height: 1.08,
-                                  letterSpacing: -1.2,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                            ),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Tu ruta,\nen marcha.',
+                              style: TextStyle(
+                                fontSize: 32,
+                                height: 1.08,
+                                letterSpacing: -1.2,
+                                fontWeight: FontWeight.w900,
                               ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'Ingresa para consultar tu ruta y empezar el recorrido.',
-                                style: TextStyle(
-                                  color: Color(0xFF64665E),
-                                  height: 1.5,
-                                ),
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Ingresa con las credenciales entregadas por tu administrador para consultar tu ruta.',
+                              style: TextStyle(
+                                color: Color(0xFF64665E),
+                                height: 1.5,
                               ),
-                              const SizedBox(height: 26),
-                              TextFormField(
-                                controller: _user,
-                                enabled: !_loading,
-                                autofillHints: const [AutofillHints.username],
-                                autocorrect: false,
-                                textInputAction: TextInputAction.next,
-                                decoration: _decoration(
-                                  'Usuario o correo',
-                                  Icons.person_outline_rounded,
-                                ),
-                                validator: (v) => v == null || v.trim().isEmpty
-                                    ? 'Ingresa tu usuario o correo'
-                                    : null,
-                              ),
+                            ),
+                            if (_auth.lastWarning != null) ...[
                               const SizedBox(height: 16),
-                              TextFormField(
-                                controller: _password,
-                                enabled: !_loading,
-                                obscureText: _obscure,
-                                autofillHints: const [AutofillHints.password],
-                                textInputAction: TextInputAction.done,
-                                onFieldSubmitted: (_) => _login(),
-                                decoration: _decoration(
-                                  'Contraseña',
-                                  Icons.lock_outline_rounded,
-                                  suffix: IconButton(
-                                    tooltip: _obscure
-                                        ? 'Mostrar contraseña'
-                                        : 'Ocultar contraseña',
-                                    onPressed: () =>
-                                        setState(() => _obscure = !_obscure),
-                                    icon: Icon(
-                                      _obscure
-                                          ? Icons.visibility_off_outlined
-                                          : Icons.visibility_outlined,
-                                    ),
-                                  ),
-                                ),
-                                validator: (v) => v == null || v.isEmpty
-                                    ? 'Ingresa tu contraseña'
-                                    : null,
-                              ),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: TextButton(
-                                  onPressed: _help,
-                                  child: const Text(
-                                    '¿Olvidaste tu contraseña?',
-                                    style: TextStyle(color: AppColors.ink),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              SizedBox(
+                              Container(
                                 width: double.infinity,
-                                height: 56,
-                                child: FilledButton(
-                                  onPressed: _loading ? null : _login,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: AppColors.ink,
-                                    foregroundColor: Colors.white,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                  ),
-                                  child: _loading
-                                      ? const SizedBox(
-                                          width: 22,
-                                          height: 22,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            color: AppColors.yellow,
-                                          ),
-                                        )
-                                      : const Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          children: [
-                                            Flexible(
-                                              child: Text(
-                                                'Iniciar recorrido',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: TextStyle(
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                            SizedBox(width: 12),
-                                            Icon(
-                                              Icons.arrow_forward_rounded,
-                                              size: 20,
-                                            ),
-                                          ],
-                                        ),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF2D6),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              ),
-                              const SizedBox(height: 14),
-                              const Center(
                                 child: Text(
-                                  'Vista de demostración · acceso simulado',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF64665E),
+                                  _auth.lastWarning!,
+                                  style: const TextStyle(
+                                    color: Color(0xFF704C00),
+                                    height: 1.35,
                                   ),
                                 ),
-                              ),
-                              Center(
-                                child: TextButton.icon(
-                                  onPressed: _help,
-                                  icon: const Icon(
-                                    Icons.support_agent_rounded,
-                                    size: 18,
-                                  ),
-                                  label: const Text('¿Necesitas ayuda?'),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF64665E),
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                height: MediaQuery.paddingOf(context).bottom,
                               ),
                             ],
-                          ),
+                            const SizedBox(height: 26),
+                            TextFormField(
+                              controller: _user,
+                              enabled: !_loading,
+                              autocorrect: false,
+                              textInputAction: TextInputAction.next,
+                              decoration: _decoration(
+                                'Usuario o correo',
+                                Icons.person_outline_rounded,
+                              ),
+                              validator: (value) =>
+                                  value == null || value.trim().isEmpty
+                                  ? 'Ingresa tu usuario o correo'
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _password,
+                              enabled: !_loading,
+                              obscureText: _obscure,
+                              autocorrect: false,
+                              textInputAction: TextInputAction.done,
+                              onFieldSubmitted: (_) => _continue(),
+                              decoration: _decoration(
+                                'Contraseña',
+                                Icons.lock_outline_rounded,
+                                suffix: IconButton(
+                                  tooltip: _obscure
+                                      ? 'Mostrar contraseña'
+                                      : 'Ocultar contraseña',
+                                  onPressed: () =>
+                                      setState(() => _obscure = !_obscure),
+                                  icon: Icon(
+                                    _obscure
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                  ),
+                                ),
+                              ),
+                              validator: (value) =>
+                                  value == null || value.isEmpty
+                                  ? 'Ingresa tu contraseña'
+                                  : null,
+                            ),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed: _help,
+                                child: const Text(
+                                  '¿Necesitas ayuda?',
+                                  style: TextStyle(color: AppColors.ink),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 56,
+                              child: FilledButton(
+                                onPressed: _loading ? null : _continue,
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppColors.ink,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                                child: _loading
+                                    ? const SizedBox(
+                                        width: 22,
+                                        height: 22,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Iniciar sesión',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                              ),
+                            ),
+                            const SizedBox(height: 22),
+                            const Center(
+                              child: Text(
+                                'La contraseña solo se usa para autenticarte y nunca se guarda en el dispositivo.',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.grey,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
