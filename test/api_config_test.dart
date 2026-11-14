@@ -18,14 +18,22 @@ void main() {
   });
   test('Android emulator reaches the host rather than its own localhost', () {
     expect(
-      ApiConfig.resolve(platform: TargetPlatform.android, isWeb: false),
+      ApiConfig.resolve(
+        platform: TargetPlatform.android,
+        isWeb: false,
+        host: 'localhost',
+      ),
       'http://10.0.2.2:5289/api',
     );
   });
 
   test('Web remains on localhost even when its host platform is Android', () {
     expect(
-      ApiConfig.resolve(platform: TargetPlatform.android, isWeb: true),
+      ApiConfig.resolve(
+        platform: TargetPlatform.android,
+        isWeb: true,
+        host: 'localhost',
+      ),
       'http://localhost:5289/api',
     );
   });
@@ -46,9 +54,20 @@ void main() {
   test('Desktop and iOS local defaults are unchanged', () {
     for (final platform in [TargetPlatform.windows, TargetPlatform.iOS]) {
       expect(
-        ApiConfig.resolve(platform: platform, isWeb: false),
+        ApiConfig.resolve(platform: platform, isWeb: false, host: 'localhost'),
         'http://localhost:5289/api',
       );
     }
+  });
+
+  test('Configured LAN IP remains available as an explicit host', () {
+    expect(
+      ApiConfig.resolve(
+        platform: TargetPlatform.android,
+        isWeb: false,
+        host: '192.168.100.38',
+      ),
+      'http://192.168.100.38:5289/api',
+    );
   });
 }

@@ -45,6 +45,40 @@ class LogisticaRepository {
         _map(await api.post('/seguimiento/pedidos/$pedidoId/entregado')),
       );
 
+  /// Best-effort: el contrato GPS remoto puede no estar disponible aún.
+  /// Los errores de endpoint ausente/no implementado se ignoran.
+  Future<void> reportarUbicacion({
+    required String rutaId,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
+    required DateTime capturadaEnUtc,
+  }) async {
+    final body = <String, Object>{
+      'rutaId': rutaId,
+      'latitud': latitud,
+      'longitud': longitud,
+      'precisionMetros': precisionMetros,
+      'capturadaEn': capturadaEnUtc.toIso8601String(),
+    };
+    for (final path in const <String>[
+      '/seguimiento/ubicacion',
+      '/repartidores/me/ubicacion',
+    ]) {
+      try {
+        await api.post(path, body: body);
+        return;
+      } on ApiException catch (error) {
+        if (error.statusCode == 404 ||
+            error.statusCode == 405 ||
+            error.statusCode == 501) {
+          continue;
+        }
+        rethrow;
+      }
+    }
+  }
+
   static Map<String, dynamic> _map(dynamic value) {
     if (value is! Map ||
         value['id'] is! String ||

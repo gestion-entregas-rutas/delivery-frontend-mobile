@@ -62,6 +62,9 @@ class DriverController extends ChangeNotifier {
   bool _foreground = true;
   bool _clientClosed = false;
   Future<void> _actionQueue = Future<void>.value();
+  DateTime? _lastLocationSentAtUtc;
+  DateTime? _lastLocationSampleAtUtc;
+  bool _sendingLocation = false;
 
   Future<void> initialize() async {
     if (_disposed) return;
@@ -96,6 +99,8 @@ class DriverController extends ChangeNotifier {
     selectedDate = next;
     route = null;
     uncertainMutation = false;
+    _lastLocationSentAtUtc = null;
+    _lastLocationSampleAtUtc = null;
     await gps.stop();
     seguimiento.setRoute(null, const <String>[]);
     _notify();
@@ -235,9 +240,7 @@ class DriverController extends ChangeNotifier {
         await action();
       } on ApiException catch (exception) {
         error = exception;
-        if (exception.isConflict ||
-            exception.isNetwork ||
-            exception.isTimeout) {
+        if (exception.isConflict || exception.isUncertain) {
           uncertainMutation = exception.isUncertain;
           await _refreshAfterMutation();
         }
@@ -298,6 +301,7 @@ class DriverController extends ChangeNotifier {
         latestGpsSample = sample;
         _notify();
       }
+      unawaited(_reportLocation(sample, generation));
     };
     gpsState = await gps.start();
     if (_disposed ||
@@ -308,6 +312,44 @@ class DriverController extends ChangeNotifier {
       return;
     }
     _notify();
+  }
+
+  Future<void> _reportLocation(GpsSample sample, int generation) async {
+    final current = route;
+    if (_disposed ||
+        !_foreground ||
+        generation != _generation ||
+        current?.estado != 'EnCurso' ||
+        uncertainMutation) {
+      return;
+    }
+    if (_lastLocationSampleAtUtc != null &&
+        !sample.capturedAtUtc.isAfter(_lastLocationSampleAtUtc!)) {
+      return;
+    }
+    final lastSent = _lastLocationSentAtUtc;
+    if (lastSent != null &&
+        sample.capturedAtUtc.difference(lastSent) <
+            const Duration(seconds: 12)) {
+      return;
+    }
+    if (_sendingLocation) return;
+    _sendingLocation = true;
+    try {
+      await repository.reportarUbicacion(
+        rutaId: current!.id,
+        latitud: sample.latitude,
+        longitud: sample.longitude,
+        precisionMetros: sample.accuracyMeters,
+        capturadaEnUtc: sample.capturedAtUtc,
+      );
+      _lastLocationSentAtUtc = sample.capturedAtUtc;
+      _lastLocationSampleAtUtc = sample.capturedAtUtc;
+    } on ApiException {
+      // Best-effort: fallos de red/contrato no deben interrumpir la operación.
+    } finally {
+      _sendingLocation = false;
+    }
   }
 
   void _setRealtimeRoute(RutaDto value) {
@@ -381,6 +423,8 @@ class DriverController extends ChangeNotifier {
     await seguimiento.stop();
     route = null;
     latestGpsSample = null;
+    _lastLocationSentAtUtc = null;
+    _lastLocationSampleAtUtc = null;
     _closeClientIfOwned();
     _disposed = true;
     notifyListeners();

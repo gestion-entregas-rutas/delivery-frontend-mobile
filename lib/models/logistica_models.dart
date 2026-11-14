@@ -26,6 +26,7 @@ class PedidoDto {
     required this.fechaEntrega,
     required this.horaEntrega,
     required this.estado,
+    this.detalles,
     this.zonaId,
     this.rutaId,
     this.registradoEn,
@@ -40,6 +41,7 @@ class PedidoDto {
   final String fechaEntrega;
   final String horaEntrega;
   final String estado;
+  final String? detalles;
   final Guid? zonaId;
   final Guid? rutaId;
   final String? registradoEn;
@@ -56,6 +58,7 @@ class PedidoDto {
     fechaEntrega: _text(json['fechaEntrega']),
     horaEntrega: _text(json['horaEntrega']),
     estado: _text(json['estado']),
+    detalles: _optionalText(json['detalles']),
     zonaId: _optionalText(json['zonaId']),
     rutaId: _optionalText(json['rutaId']),
     registradoEn: _optionalText(json['registradoEn']),
@@ -71,6 +74,7 @@ class PedidoDto {
     fechaEntrega: fechaEntrega,
     horaEntrega: horaEntrega,
     estado: estado ?? this.estado,
+    detalles: detalles,
     zonaId: zonaId,
     rutaId: rutaId,
     registradoEn: registradoEn,

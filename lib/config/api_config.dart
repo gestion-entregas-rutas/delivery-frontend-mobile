@@ -1,9 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  // CAMBIA AQUÍ la IP del equipo donde se ejecuta el backend.
-  // Ejemplo: '192.168.100.38' (sin http://, puerto ni /api).
-  // 'localhost' conserva el desarrollo local y se adapta al emulador Android.
   static const String serverIp = '192.168.100.38';
   static const int serverPort = 5289;
   static const String scheme = 'http';
