@@ -673,6 +673,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               color: AppColors.ink,
             ),
           ),
+          if (order.clienteTelefono.isNotEmpty)
+            Text('Teléfono: ${order.clienteTelefono}'),
+          Text(
+            'Coordenadas: ${order.ubicacion.latitud.toStringAsFixed(6)}, '
+            '${order.ubicacion.longitud.toStringAsFixed(6)}',
+          ),
           const SizedBox(height: 4),
           Text(
             '${order.fechaEntrega} · ${order.horaEntrega}',
