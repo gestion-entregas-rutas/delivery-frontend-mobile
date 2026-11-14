@@ -1,0 +1,89 @@
+// Contrato JSON actual de Application/DTOs. Fechas y horas se transmiten como strings.
+export type Guid = string;
+export type Fecha = string; // yyyy-MM-dd; no convertir a UTC con toISOString().
+export type Hora = string; // HH:mm:ss
+export type EstadoPedido = 'Pendiente' | 'AsignadoARuta' | 'EnCamino' | 'Entregado' | 'Cancelado';
+export type EstadoRuta = 'Planificada' | 'EnCurso' | 'Completada' | 'Cancelada';
+export type EstadoRepartidor = 'Disponible' | 'EnRuta' | 'NoDisponible';
+export type TipoAsignacion = 'RutaExistente' | 'RutaNueva' | 'EnEspera';
+
+export interface PuntoDto { latitud: number; longitud: number; }
+export interface CrearZonaRequest {
+  nombre: string;
+  poligono: PuntoDto[];
+  maxPedidosPorRuta?: number; // Por defecto 4.
+}
+export interface ActualizarZonaRequest {
+  nombre: string;
+  poligono: PuntoDto[];
+  maxPedidosPorRuta: number;
+  activa: boolean;
+}
+export interface ZonaDto extends ActualizarZonaRequest { id: Guid; }
+
+export interface CrearRepartidorRequest {
+  nombre: string;
+  telefono: string;
+  capacidadMaxima: number;
+}
+export interface CambiarDisponibilidadRequest { disponible: boolean; }
+export interface RepartidorDto extends CrearRepartidorRequest { id: Guid; estado: EstadoRepartidor; }
+
+export interface RegistrarPedidoRequest {
+  clienteNombre: string;
+  clienteTelefono: string;
+  direccion: string;
+  latitud: number;
+  longitud: number;
+  fechaEntrega: Fecha;
+  horaEntrega: Hora;
+  zonaId?: Guid | null;
+}
+export interface PedidoDto {
+  id: Guid;
+  clienteNombre: string;
+  clienteTelefono: string;
+  direccion: string;
+  ubicacion: PuntoDto;
+  zonaId: Guid;
+  fechaEntrega: Fecha;
+  horaEntrega: Hora;
+  estado: EstadoPedido;
+  rutaId: Guid | null;
+  registradoEn: string; // ISO 8601 con offset.
+  entregadoEn: string | null;
+}
+export interface ResultadoAsignacionDto { tipo: TipoAsignacion; rutaId: Guid | null; }
+export interface RegistroPedidoDto { pedido: PedidoDto; asignacion: ResultadoAsignacionDto | null; }
+export interface FiltroPedidos {
+  fecha?: Fecha;
+  zonaId?: Guid;
+  estado?: EstadoPedido;
+  pagina?: number;
+  tamano?: number;
+}
+export interface PaginaDto<T> { items: T[]; total: number; pagina: number; tamano: number; }
+
+export interface ArmarRutasRequest { fecha: Fecha; zonaId?: Guid | null; }
+export interface AgregarPedidoARutaRequest { pedidoId: Guid; posicion?: number | null; }
+export interface ParadaDto { orden: number; pedido: PedidoDto; }
+export interface RutaDto {
+  id: Guid;
+  fecha: Fecha;
+  zonaId: Guid;
+  repartidorId: Guid;
+  capacidad: number;
+  estado: EstadoRuta;
+  paradas: ParadaDto[];
+}
+export interface ArmadoRutasDto { fecha: Fecha; rutas: RutaDto[]; pedidosSinAsignar: number; }
+
+export interface ApiProblem {
+  type?: string;
+  title?: string;
+  status?: number;
+  detail?: string;
+  instance?: string;
+  errors?: Record<string, string[]>;
+  traceId?: string;
+}
