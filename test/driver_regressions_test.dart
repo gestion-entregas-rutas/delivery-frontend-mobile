@@ -16,6 +16,7 @@ RutaDto sample({
   String date = '2026-10-17',
   String driver = 'd',
   String id = 'r',
+  String? detalles,
 }) => RutaDto(
   id: id,
   fecha: date,
@@ -31,6 +32,7 @@ RutaDto sample({
         clienteNombre: 'Cliente',
         clienteTelefono: '099',
         direccion: 'Dirección',
+        detalles: detalles,
         ubicacion: const PuntoDto(latitud: -1, longitud: -2),
         fechaEntrega: date,
         horaEntrega: '09:00:00',
@@ -93,6 +95,30 @@ DriverController create(Repo repo, {Realtime? hub, Gps? gps}) =>
       initialDate: DateTime(2026, 10, 17),
     );
 void main() {
+  testWidgets('CP-PED-06: la parada muestra los datos de entrega y los productos', (tester) async {
+    final repo = Repo()..current = sample(detalles: '2 × Vela, 1 × Jabón');
+    final controller = create(repo);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomeScreen(repository: repo, driverId: 'd', controller: controller),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    for (final dato in [
+      'Cliente',
+      'Dirección',
+      '2026-10-17',
+      '09:00:00',
+      '2 × Vela, 1 × Jabón',
+      '099',
+      '-1.000000, -2.000000',
+    ]) {
+      expect(find.textContaining(dato), findsWidgets, reason: 'Dato visible: $dato');
+    }
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
   test('A stale GET cannot overwrite a newer date', () async {
     final repo = Repo();
     final first = Completer<RutaDto?>();
