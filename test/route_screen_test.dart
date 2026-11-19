@@ -54,6 +54,32 @@ class FakeRepo extends LogisticaRepository {
   /// Cuántas veces se pidió iniciar la ruta al servidor.
   int startRequests = 0;
 
+  /// Cuántas veces se volvió a pedir la ruta completa (al cerrarla).
+  int routeFetches = 0;
+
+  @override
+  Future<PedidoDto> confirmarEntrega(String pedidoId) async {
+    final pedido = current!.paradas
+        .map((p) => p.pedido)
+        .firstWhere((p) => p.id == pedidoId);
+    return pedido.copyWith(estado: 'Entregado');
+  }
+
+  @override
+  Future<RutaDto> ruta(String rutaId) async {
+    routeFetches++;
+    final base = current!;
+    return RutaDto(
+      id: base.id,
+      fecha: base.fecha,
+      zonaId: base.zonaId,
+      repartidorId: base.repartidorId,
+      capacidad: base.capacidad,
+      estado: 'Completada',
+      paradas: base.paradas,
+    );
+  }
+
   @override
   Future<RutaDto> iniciarRuta(String rutaId) async {
     startRequests++;

@@ -29,6 +29,8 @@ List<MapStop> mapStopsOf(RutaDto? route) {
   if (route == null) return const [];
   final result = <MapStop>[];
   for (final stop in route.paradas) {
+    // Un pedido cancelado ya no se visita: no va en el mapa.
+    if (stop.pedido.cancelado) continue;
     final lat = stop.pedido.ubicacion.latitud;
     final lng = stop.pedido.ubicacion.longitud;
     final valid =

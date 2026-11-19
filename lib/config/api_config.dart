@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  static const String serverIp = '10.79.21.184';
-  static const int serverPort = 5289;
-  static const String scheme = 'http';
+  static const String serverIp = 'delivery-backend-ilpi.onrender.com';
+  static const int serverPort = 443;
+  static const String scheme = 'https';
 
   static String get baseUrl =>
       resolve(platform: defaultTargetPlatform, isWeb: kIsWeb);

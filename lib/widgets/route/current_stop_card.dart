@@ -4,15 +4,44 @@ import '../../models/logistica_models.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_text.dart';
 import '../../utils/contact.dart';
+import '../../utils/format.dart';
 import '../status_chip.dart';
 
-/// Separa el resumen de artículos ("2 × Vela, 1 × Jabón") en una lista de
-/// líneas, por comas o saltos de línea.
-List<String> parseStopItems(String? detalles) => (detalles ?? '')
-    .split(RegExp(r'[\n,]'))
-    .map((item) => item.trim())
-    .where((item) => item.isNotEmpty)
-    .toList();
+// Un artículo del checkout empieza con la cantidad: "2x Audífonos".
+final RegExp _itemStart = RegExp(r'^\s*\d+\s*[xX×]\s+\S');
+// Entre artículos hay ", " seguido de la cantidad del siguiente. Una coma que
+// no va seguida de "1x ..." es parte del nombre y no corta.
+final RegExp _itemSplit = RegExp(r',\s*(?=\d+\s*[xX×]\s+\S)');
+
+/// Lo que dice `observaciones`: artículos o una nota libre.
+class Observaciones {
+  const Observaciones({this.items = const [], this.note});
+
+  /// Artículos ("2x Audífonos"), cuando el pedido viene de la tienda.
+  final List<String> items;
+
+  /// Texto libre (pedidos creados a mano), que NO se parte por comas.
+  final String? note;
+}
+
+/// Los pedidos de la tienda traen `"{cantidad}x {producto}"` separados por
+/// `", "`; los creados a mano traen texto libre. Solo en el primer caso se
+/// parte en artículos; el texto libre se deja entero.
+Observaciones parseObservaciones(String? raw) {
+  final text = (raw ?? '').trim();
+  if (text.isEmpty) return const Observaciones();
+  if (!_itemStart.hasMatch(text)) return Observaciones(note: text);
+  final items = <String>[
+    for (final line in text.split('\n'))
+      for (final item in line.split(_itemSplit))
+        if (item.trim().isNotEmpty) item.trim(),
+  ];
+  return Observaciones(items: items);
+}
+
+/// Los artículos de un pedido (vacío si es texto libre).
+List<String> parseStopItems(String? detalles) =>
+    parseObservaciones(detalles).items;
 
 /// La parada en la que está el repartidor: quién es, dónde, qué lleva y cómo
 /// contactarlo. Es el bloque principal de la pantalla.
@@ -36,7 +65,10 @@ class CurrentStopCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final order = stop.pedido;
     final enRoute = order.estado == 'EnCamino';
-    final items = parseStopItems(order.detalles);
+    final obs = parseObservaciones(order.detalles);
+    final items = obs.items;
+    final note = obs.note;
+    final cargo = _cargoChips(order);
     final phone = order.clienteTelefono.trim();
     final hasPhone = phone.isNotEmpty;
     final canWhatsapp = whatsappUri(phone) != null;
@@ -112,7 +144,7 @@ class CurrentStopCard extends StatelessWidget {
                 ),
             ],
           ),
-          if (items.isNotEmpty) ...[
+          if (items.isNotEmpty || note != null || cargo.isNotEmpty) ...[
             const SizedBox(height: 16),
             Container(
               width: double.infinity,
@@ -126,15 +158,23 @@ class CurrentStopCard extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      const Icon(
-                        Icons.inventory_2_rounded,
+                      Icon(
+                        items.isNotEmpty
+                            ? Icons.inventory_2_rounded
+                            : note != null
+                            ? Icons.sticky_note_2_rounded
+                            : Icons.scale_rounded,
                         size: 18,
                         color: AppColors.brand,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Para entregar',
+                          items.isNotEmpty
+                              ? 'Para entregar'
+                              : note != null
+                              ? 'Observaciones'
+                              : 'Datos de la carga',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: AppText.bodySmall.copyWith(
@@ -157,6 +197,20 @@ class CurrentStopCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                  // Nota libre del pedido (no se parte en artículos).
+                  if (note != null)
+                    Text(
+                      note,
+                      style: AppText.body.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                  // Frágil, prioridad, peso y tipo, solo los que tienen valor.
+                  if (cargo.isNotEmpty) ...[
+                    SizedBox(height: items.isEmpty && note == null ? 0 : 12),
+                    Wrap(spacing: 8, runSpacing: 8, children: cargo),
+                  ],
                 ],
               ),
             ),
@@ -216,6 +270,67 @@ class CurrentStopCard extends StatelessWidget {
                 ],
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Marcas de la carga que el repartidor debe saber: frágil, prioridad, peso y
+/// tipo. Solo las que el pedido trae con valor; el resto no se muestra.
+List<Widget> _cargoChips(PedidoDto order) => [
+  if (order.fragil)
+    const _CargoChip(
+      icon: Icons.warning_amber_rounded,
+      label: 'Frágil',
+      warning: true,
+    ),
+  if (order.prioridad != null)
+    _CargoChip(
+      icon: Icons.flag_rounded,
+      label: 'Prioridad: ${order.prioridad}',
+      // Urgente y Alta se resaltan: hay que entregarlos primero.
+      warning: const {
+        'urgente',
+        'alta',
+      }.contains(order.prioridad!.toLowerCase()),
+    ),
+  if (order.pesoKg != null)
+    _CargoChip(icon: Icons.scale_rounded, label: formatWeight(order.pesoKg!)),
+  if (order.tipoCarga != null)
+    _CargoChip(icon: Icons.category_rounded, label: order.tipoCarga!),
+];
+
+class _CargoChip extends StatelessWidget {
+  const _CargoChip({
+    required this.icon,
+    required this.label,
+    this.warning = false,
+  });
+
+  final IconData icon;
+  final String label;
+
+  /// Frágil va en ámbar: es lo que más importa al manipular el paquete.
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = warning ? AppColors.amber : AppColors.brandDeep;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: warning ? AppColors.amberSoft : AppColors.surface,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(label, style: AppText.label.copyWith(color: color)),
           ),
         ],
       ),

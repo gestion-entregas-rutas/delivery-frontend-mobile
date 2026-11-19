@@ -20,3 +20,11 @@ String formatDuration(double seconds) {
   final rest = minutes % 60;
   return rest == 0 ? '$hours h' : '$hours h $rest min';
 }
+
+/// `2` -> `2 kg`, `2.5` -> `2,5 kg`, `0.35` -> `350 g`.
+String formatWeight(double kg) {
+  if (!kg.isFinite || kg <= 0) return '—';
+  if (kg < 1) return '${(kg * 1000).round()} g';
+  final text = kg.toStringAsFixed(kg == kg.roundToDouble() ? 0 : 1);
+  return '${text.replaceAll('.', ',')} kg';
+}

@@ -45,8 +45,14 @@ class LogisticaRepository {
         _map(await api.post('/seguimiento/pedidos/$pedidoId/entregado')),
       );
 
-  /// Best-effort: el contrato GPS remoto puede no estar disponible aún.
-  /// Los errores de endpoint ausente/no implementado se ignoran.
+  /// Publica la posición del repartidor. Contrato confirmado por el backend:
+  /// `POST /api/repartidores/me/ubicacion` con `capturadaEn` en ISO 8601 con
+  /// offset (aquí siempre UTC, "Z").
+  ///
+  /// Errores: 403 (credenciales sin cambiar o ruta de otro repartidor), 404
+  /// (ruta inexistente), 422 (la ruta no está EnCurso) y 400 (datos fuera de
+  /// rango). Quien llama lo trata como mejor esfuerzo: un fallo aquí nunca debe
+  /// interrumpir la entrega.
   Future<void> reportarUbicacion({
     required String rutaId,
     required double latitud,
@@ -54,29 +60,16 @@ class LogisticaRepository {
     required double precisionMetros,
     required DateTime capturadaEnUtc,
   }) async {
-    final body = <String, Object>{
-      'rutaId': rutaId,
-      'latitud': latitud,
-      'longitud': longitud,
-      'precisionMetros': precisionMetros,
-      'capturadaEn': capturadaEnUtc.toIso8601String(),
-    };
-    for (final path in const <String>[
-      '/seguimiento/ubicacion',
+    await api.post(
       '/repartidores/me/ubicacion',
-    ]) {
-      try {
-        await api.post(path, body: body);
-        return;
-      } on ApiException catch (error) {
-        if (error.statusCode == 404 ||
-            error.statusCode == 405 ||
-            error.statusCode == 501) {
-          continue;
-        }
-        rethrow;
-      }
-    }
+      body: <String, Object>{
+        'rutaId': rutaId,
+        'latitud': latitud,
+        'longitud': longitud,
+        'precisionMetros': precisionMetros,
+        'capturadaEn': capturadaEnUtc.toUtc().toIso8601String(),
+      },
+    );
   }
 
   static Map<String, dynamic> _map(dynamic value) {

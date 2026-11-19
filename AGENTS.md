@@ -4,6 +4,8 @@
 Este repositorio es la aplicación móvil en **Flutter** para los conductores/repartidores (`RutaExpress`)[cite: 11], conectada al backend en C# / .NET (`http://192.168.100.38:5289/api` o configurado en `lib/config/api_config.dart`)[cite: 11] y al hub SignalR (`/hubs/seguimiento`)[cite: 11].
 Con el nuevo enfoque E-Commerce, los clientes compran en la tienda web (`frontend-tienda`) y, cuando eligen entrega a `Domicilio`, el backend genera automáticamente un `Pedido` logístico que el algoritmo propio asigna a la ruta del repartidor.
 
+El contrato del backend que usa la app (endpoints, forma de `detalles`, estados, fechas, ubicación) está confirmado y documentado en `docs/contrato-backend.md`: consúltalo antes de suponer cualquier campo, y actualízalo si el backend cambia.
+
 Tu misión es **mantener intacto el flujo operacional aprobado**, integrar la visualización de los artículos comprados en cada parada y cerrar los pendientes críticos de pruebas y GPS documentados en `MOVIL-FRONTEND.md`[cite: 11].
 
 ## 2. Reglas Inquebrantables
