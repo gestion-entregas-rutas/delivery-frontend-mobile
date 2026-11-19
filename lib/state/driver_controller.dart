@@ -240,7 +240,8 @@ class DriverController extends ChangeNotifier {
     if (!_sameRoute(current)) return;
     route = route!.withPedido(updated);
     _setRealtimeRoute(route!);
-    if (route!.paradas.every((stop) => stop.pedido.estado == 'Entregado')) {
+    // Las paradas canceladas no impiden cerrar la ruta.
+    if (route!.allResolved) {
       try {
         final refreshed = await repository.ruta(current.id);
         if (!_sameRoute(current)) return;

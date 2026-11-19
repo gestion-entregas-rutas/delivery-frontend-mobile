@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Modelos del contrato JSON de Delivery API.
 ///
 /// Las fechas de ruta se mantienen como `yyyy-MM-dd`; nunca se convierten a
@@ -27,6 +29,12 @@ class PedidoDto {
     required this.horaEntrega,
     required this.estado,
     this.detalles,
+    this.fragil = false,
+    this.prioridad,
+    this.pesoKg,
+    this.tipoCarga,
+    this.destinatarioNombre,
+    this.destinatarioTelefono,
     this.zonaId,
     this.rutaId,
     this.registradoEn,
@@ -41,29 +49,57 @@ class PedidoDto {
   final String fechaEntrega;
   final String horaEntrega;
   final String estado;
+
+  /// Resumen de lo que hay que entregar (los artículos), en texto.
   final String? detalles;
+
+  /// Datos de la carga que vienen dentro de `detalles` cuando el servidor lo
+  /// manda como objeto.
+  final bool fragil;
+  final String? prioridad;
+  final double? pesoKg;
+  final String? tipoCarga;
+
+  /// Quien recibe, si el servidor lo manda aparte del cliente. Hoy la pantalla
+  /// usa `clienteNombre` y `clienteTelefono`; estos quedan disponibles hasta
+  /// confirmar con el backend cuál mostrar cuando difieren.
+  final String? destinatarioNombre;
+  final String? destinatarioTelefono;
   final Guid? zonaId;
+
+  /// Pedido cancelado: sigue en la ruta pero ya no hay que entregarlo.
+  bool get cancelado => estado == 'Cancelado';
+  bool get entregado => estado == 'Entregado';
   final Guid? rutaId;
   final String? registradoEn;
   final String? entregadoEn;
 
-  factory PedidoDto.fromJson(Map<String, dynamic> json) => PedidoDto(
-    id: _text(json['id']),
-    clienteNombre: _text(json['clienteNombre']),
-    clienteTelefono: _text(json['clienteTelefono']),
-    direccion: _text(json['direccion']),
-    ubicacion: PuntoDto.fromJson(
-      _map(json['ubicacion'] ?? <String, dynamic>{}),
-    ),
-    fechaEntrega: _text(json['fechaEntrega']),
-    horaEntrega: _text(json['horaEntrega']),
-    estado: _text(json['estado']),
-    detalles: _optionalText(json['detalles']),
-    zonaId: _optionalText(json['zonaId']),
-    rutaId: _optionalText(json['rutaId']),
-    registradoEn: _optionalText(json['registradoEn']),
-    entregadoEn: _optionalText(json['entregadoEn']),
-  );
+  factory PedidoDto.fromJson(Map<String, dynamic> json) {
+    final carga = _parseDetalles(json['detalles']);
+    return PedidoDto(
+      id: _text(json['id']),
+      clienteNombre: _text(json['clienteNombre']),
+      clienteTelefono: _text(json['clienteTelefono']),
+      direccion: _text(json['direccion']),
+      ubicacion: PuntoDto.fromJson(
+        _map(json['ubicacion'] ?? <String, dynamic>{}),
+      ),
+      fechaEntrega: _text(json['fechaEntrega']),
+      horaEntrega: _text(json['horaEntrega']),
+      estado: _text(json['estado']),
+      detalles: carga.resumen,
+      fragil: carga.fragil,
+      prioridad: carga.prioridad,
+      pesoKg: carga.pesoKg,
+      tipoCarga: carga.tipoCarga,
+      destinatarioNombre: _clean(json['destinatarioNombre']),
+      destinatarioTelefono: _clean(json['destinatarioTelefono']),
+      zonaId: _optionalText(json['zonaId']),
+      rutaId: _optionalText(json['rutaId']),
+      registradoEn: _optionalText(json['registradoEn']),
+      entregadoEn: _optionalText(json['entregadoEn']),
+    );
+  }
 
   PedidoDto copyWith({String? estado}) => PedidoDto(
     id: id,
@@ -75,6 +111,12 @@ class PedidoDto {
     horaEntrega: horaEntrega,
     estado: estado ?? this.estado,
     detalles: detalles,
+    fragil: fragil,
+    prioridad: prioridad,
+    pesoKg: pesoKg,
+    tipoCarga: tipoCarga,
+    destinatarioNombre: destinatarioNombre,
+    destinatarioTelefono: destinatarioTelefono,
     zonaId: zonaId,
     rutaId: rutaId,
     registradoEn: registradoEn,
@@ -131,7 +173,13 @@ class RutaDto {
   }
 
   int get completedCount =>
-      paradas.where((stop) => stop.pedido.estado == 'Entregado').length;
+      paradas.where((stop) => stop.pedido.entregado).length;
+
+  /// Paradas que hay que entregar: las canceladas no cuentan.
+  int get activeCount => paradas.where((stop) => !stop.pedido.cancelado).length;
+
+  /// Todas las paradas no canceladas están entregadas (y hay al menos una).
+  bool get allResolved => activeCount > 0 && completedCount == activeCount;
 
   RutaDto withPedido(PedidoDto pedido) => RutaDto(
     id: id,
@@ -180,6 +228,84 @@ class RepartidorDto {
 Map<String, dynamic> _map(dynamic value) =>
     value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
 List<dynamic> _list(dynamic value) => value is List ? value : const <dynamic>[];
+
+/// Lo que se entiende del campo `detalles` de un pedido.
+class CargaDetalles {
+  const CargaDetalles({
+    this.resumen,
+    this.fragil = false,
+    this.prioridad,
+    this.pesoKg,
+    this.tipoCarga,
+  });
+
+  final String? resumen;
+  final bool fragil;
+  final String? prioridad;
+  final double? pesoKg;
+  final String? tipoCarga;
+}
+
+/// Texto limpio o `null`: sin espacios y sin los "null" que salen de convertir
+/// un valor vacío a texto.
+String? _clean(dynamic value) {
+  if (value == null) return null;
+  final text = value.toString().trim();
+  if (text.isEmpty || text.toLowerCase() == 'null') return null;
+  return text;
+}
+
+bool _truthy(dynamic value) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  final text = _clean(value)?.toLowerCase();
+  return text == 'true' || text == 'si' || text == 'sí' || text == '1';
+}
+
+/// `detalles` puede llegar como texto ("2x Vela, 1x Jabón") o como objeto con
+/// la carga ({observaciones: ..., fragil: ..., prioridad: ...}). También se
+/// acepta ese objeto escrito como texto JSON. Nunca se muestra el objeto
+/// crudo: solo el resumen de artículos y los datos de la carga que tengan
+/// valor.
+CargaDetalles _parseDetalles(dynamic raw) {
+  if (raw == null) return const CargaDetalles();
+  if (raw is Map) return _cargaDeMapa(raw);
+  final text = _clean(raw);
+  if (text == null) return const CargaDetalles();
+  if (text.startsWith('{') && text.endsWith('}')) {
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) return _cargaDeMapa(decoded);
+    } on FormatException {
+      // No era JSON: se trata como texto normal.
+    }
+  }
+  return CargaDetalles(resumen: text);
+}
+
+CargaDetalles _cargaDeMapa(Map<dynamic, dynamic> map) {
+  String? resumen =
+      _clean(map['observaciones']) ??
+      _clean(map['descripcion']) ??
+      _clean(map['detalle']);
+  final articulos = map['articulos'] ?? map['items'];
+  if (resumen == null && articulos is List) {
+    final names = articulos.map(_clean).whereType<String>().toList();
+    if (names.isNotEmpty) resumen = names.join(', ');
+  }
+  final peso = map['pesoKg'];
+  final kg = peso is num
+      ? peso.toDouble()
+      : double.tryParse(_clean(peso) ?? '');
+  return CargaDetalles(
+    resumen: resumen,
+    fragil: _truthy(map['fragil']),
+    prioridad: _clean(map['prioridad']),
+    pesoKg: kg != null && kg > 0 ? kg : null,
+    tipoCarga: _clean(map['tipoCarga']),
+  );
+}
+
 String _text(dynamic value) => value?.toString() ?? '';
 String? _optionalText(dynamic value) => value == null ? null : _text(value);
 double _number(dynamic value) =>

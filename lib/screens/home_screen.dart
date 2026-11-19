@@ -350,7 +350,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   ParadaDto? _activeStop(RutaDto route) {
     for (final stop in route.paradas) {
-      if (stop.pedido.estado != 'Entregado') return stop;
+      // Las entregadas y las canceladas ya no son "la parada actual".
+      if (!stop.pedido.entregado && !stop.pedido.cancelado) return stop;
     }
     return null;
   }
@@ -533,7 +534,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _routeTab(bool wide, _RouteAction? action) {
     final route = _controller.route;
     final done = route?.completedCount ?? 0;
-    final total = route?.paradas.length ?? 0;
+    // El avance no cuenta las paradas canceladas.
+    final total = route?.activeCount ?? 0;
     final active = route == null ? null : _activeStop(route);
     final inProgress = route?.estado == 'EnCurso';
     _scrollToActive(wide ? null : (inProgress ? active : null));
@@ -672,11 +674,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required bool compactActive,
   }) {
     final total = route.paradas.length;
-    final finished = total > 0 && route.completedCount == total;
+    final finished = route.allResolved;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (finished) _finishedBanner(total),
+        if (finished) _finishedBanner(route.activeCount),
         for (var i = 0; i < total; i++)
           _timelineTile(
             route,
@@ -698,8 +700,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     required bool isActive,
     required bool compactActive,
   }) {
-    final delivered = stop.pedido.estado == 'Entregado';
-    final status = delivered
+    final delivered = stop.pedido.entregado;
+    final status = stop.pedido.cancelado
+        ? AppStatus.error
+        : delivered
         ? AppStatus.done
         : isActive
         ? AppStatus.active

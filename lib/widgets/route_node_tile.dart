@@ -98,7 +98,7 @@ String _statusLabel(AppStatus status) => switch (status) {
   AppStatus.active => 'actual',
   AppStatus.pending => 'pendiente',
   AppStatus.warning => 'con aviso',
-  AppStatus.error => 'con error',
+  AppStatus.error => 'cancelada',
 };
 
 class _Line extends StatelessWidget {
@@ -122,6 +122,7 @@ class _Node extends StatelessWidget {
   Widget build(BuildContext context) {
     final done = status == AppStatus.done;
     final active = status == AppStatus.active;
+    final cancelled = status == AppStatus.error;
     return Container(
       width: size,
       height: size,
@@ -132,12 +133,16 @@ class _Node extends StatelessWidget {
             ? AppColors.done
             : active
             ? AppColors.brand
+            : cancelled
+            ? AppColors.redSoft
             : AppColors.surface,
         border: Border.all(
           color: done
               ? AppColors.done
               : active
               ? AppColors.brand
+              : cancelled
+              ? AppColors.red
               : AppColors.border,
           width: 2.5,
         ),
@@ -153,6 +158,8 @@ class _Node extends StatelessWidget {
       ),
       child: done
           ? const Icon(Icons.check_rounded, size: 18, color: Colors.white)
+          : cancelled
+          ? const Icon(Icons.close_rounded, size: 18, color: AppColors.red)
           : Text(
               '$number',
               style: (active ? AppText.headline : AppText.label).copyWith(
