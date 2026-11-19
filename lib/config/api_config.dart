@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 class ApiConfig {
-  static const String serverIp = '192.168.100.38';
+  static const String serverIp = '10.79.21.184';
   static const int serverPort = 5289;
   static const String scheme = 'http';
 

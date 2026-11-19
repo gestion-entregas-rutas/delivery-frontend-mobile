@@ -40,6 +40,10 @@ dependencies:
   signalr_netcore: ^1.4.4
   url_launcher: ^6.3.3
   flutter_secure_storage: ^11.2.0
+  rive: ^0.14.11
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -62,6 +66,19 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/rive/
+
+  # Fuentes variables (licencia OFL, ver assets/fonts/OFL-*.txt): el peso se
+  # toma del eje wght, así que un solo archivo cubre todos los pesos.
+  fonts:
+    - family: BricolageGrotesque
+      fonts:
+        - asset: assets/fonts/BricolageGrotesque-Variable.ttf
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree-Variable.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

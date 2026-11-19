@@ -1,33 +1,57 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth/auth_controller.dart';
-import '../data/api/api_exception.dart';
 import '../data/api/logistica_repository.dart';
+import '../data/routing/road_router.dart';
 import '../location/gps_service.dart';
 import '../models/logistica_models.dart';
+import '../settings/device_settings.dart';
 import '../state/driver_controller.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_text.dart';
+import '../theme/app_theme.dart';
+import '../utils/route_day.dart';
+import '../utils/contact.dart';
+import '../widgets/primary_button.dart';
+import '../widgets/route/current_stop_card.dart';
+import '../widgets/route/empty_state.dart';
+import '../widgets/route/gps_status.dart';
+import '../widgets/route/inline_notice.dart';
+import '../widgets/route/route_header.dart';
+import '../widgets/route/route_map.dart';
+import '../widgets/route/stop_row.dart';
+import '../widgets/route_node_tile.dart';
+import '../widgets/settings/setting_tile.dart';
+import '../widgets/status_chip.dart';
 import 'login_screen.dart';
+import 'stop_route_screen.dart';
 
-class AppColors {
-  static const canvas = Color(0xFFF5F5F7);
-  static const surface = Color(0xFFFFFFFF);
-  static const yellow = Color(0xFFFFC107);
-  static const yellowSoft = Color(0xFFFFF4CC);
-  static const ink = Color(0xFF111111);
-  static const grey = Color(0xFF6E6E73);
-  static const border = Color(0xFFE5E5EA);
-  static const green = Color(0xFF34C759);
-  static const greenSoft = Color(0xFFEAF9EF);
-  static const blue = Color(0xFF007AFF);
-  static const blueSoft = Color(0xFFE8F2FF);
-  static const orange = Color(0xFFFF9500);
-  static const orangeSoft = Color(0xFFFFF3E0);
-}
+// AppColors vive en theme/; se reexporta para no cambiar todos los imports.
+export '../theme/app_colors.dart';
 
 const String kAppName = 'RutaExpress';
+
+/// A partir de este ancho la ruta se muestra en dos columnas.
+const double kWideBreakpoint = 840;
+
+/// Lo que hace el botón fijo de abajo según el estado de la ruta.
+class _RouteAction {
+  const _RouteAction({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.loading = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool loading;
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -36,12 +60,21 @@ class HomeScreen extends StatefulWidget {
     required this.driverId,
     this.controller,
     this.auth,
+    this.router,
+    this.deviceSettings,
   });
 
   final LogisticaRepository repository;
   final String driverId;
   final DriverController? controller;
   final AuthController? auth;
+
+  /// Traza caminos por calles. Si no se da, se usa el OSRM público.
+  final RoadRouter? router;
+
+  /// Ajustes del teléfono (GPS, precisión, notificaciones) que se manejan desde
+  /// Perfil. Si no se da, se usan los del sistema.
+  final DeviceSettingsController? deviceSettings;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -56,19 +89,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         closeApiClient: widget.auth == null,
         validateSession: widget.auth?.validateCurrentSession,
       );
+
+  /// 0 = Ruta, 1 = Mapa, 2 = Perfil.
   int _navIndex = 0;
+
+  late final RoadRouter _router = widget.router ?? OsrmRoadRouter();
+  late final DeviceSettingsController _settings =
+      widget.deviceSettings ?? DeviceSettingsController();
+
+  // Para llevar la vista hasta la parada actual al abrir la ruta.
+  final GlobalKey _activeKey = GlobalKey();
+  String? _scrolledTo;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_controller.initialize());
+    unawaited(_settings.refresh());
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _controller.onResumed();
+      // Pudo haber cambiado algo en los ajustes del teléfono.
+      unawaited(_settings.refresh());
     } else {
       _controller.onPaused();
     }
@@ -78,7 +124,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     if (widget.controller == null) _controller.dispose();
+    if (widget.router == null) (_router as OsrmRoadRouter).close();
+    if (widget.deviceSettings == null) _settings.dispose();
     super.dispose();
+  }
+
+  // ---------------------------------------------------------------- acciones
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _logout() async {
@@ -129,12 +185,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startRoute() async {
+    final blocked = _controller.startBlockedReason;
+    if (blocked != null) {
+      _snack(blocked);
+      return;
+    }
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Ubicación durante la ruta'),
         content: const Text(
-          'Mientras la ruta esté activa, la app capturará tu ubicación para apoyar el seguimiento operativo. Si el servidor dispone de endpoint de ubicación, intentará enviarla de forma autenticada.',
+          'Mientras la ruta esté activa, la app usa tu ubicación para el seguimiento de tus entregas.',
         ),
         actions: [
           TextButton(
@@ -143,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Continuar'),
+            child: const Text('Iniciar ruta'),
           ),
         ],
       ),
@@ -154,676 +215,90 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _call(String phone) async {
     final uri = Uri(scheme: 'tel', path: phone);
     try {
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
-          mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir el marcador.')),
-        );
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        _snack('No se pudo abrir el marcador.');
       }
     } on Exception {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir el marcador.')),
-        );
-      }
+      _snack('No se pudo abrir el marcador.');
     }
   }
 
-  Future<void> _openMap(double latitude, double longitude) async {
-    final uri = Uri.https('www.google.com', '/maps/search/', <String, String>{
-      'api': '1',
-      'query': '$latitude,$longitude',
-    });
-    try {
-      if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
-          mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir una app de mapas.')),
-        );
-      }
-    } on Exception {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No se pudo abrir una app de mapas.')),
-        );
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    builder: (context, _) => Scaffold(
-      backgroundColor: AppColors.canvas,
-      body: SafeArea(bottom: false, child: _body()),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _navIndex,
-        onDestinationSelected: (index) => setState(() => _navIndex = index),
-        backgroundColor: AppColors.surface,
-        surfaceTintColor: Colors.transparent,
-        indicatorColor: AppColors.yellowSoft,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.route_outlined),
-            selectedIcon: Icon(Icons.route_rounded, color: AppColors.ink),
-            label: 'Ruta',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person_rounded, color: AppColors.ink),
-            label: 'Perfil',
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _body() {
-    if (_navIndex == 1) return _profile();
-    return RefreshIndicator(
-      onRefresh: _controller.refresh,
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(child: _hero()),
-          SliverToBoxAdapter(
-            child: Container(
-              decoration: const BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x14000000),
-                    blurRadius: 20,
-                    offset: Offset(0, -4),
-                  ),
-                ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 28),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 36,
-                        height: 5,
-                        decoration: BoxDecoration(
-                          color: AppColors.border,
-                          borderRadius: BorderRadius.circular(99),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    _dateHeader(),
-                    const SizedBox(height: 10),
-                    if (_controller.realtimeError != null)
-                      _warning(_controller.realtimeError!),
-                    if (_controller.error != null)
-                      _errorCard(_controller.error!),
-                    _routeContent(),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _hero() {
-    final route = _controller.route;
-    final done = route?.completedCount ?? 0;
-    final total = route?.paradas.length ?? 0;
-    final finished = route != null && total > 0 && done == total;
-    final title = route == null
-        ? 'Mi ruta del día'
-        : finished
-        ? '¡Ruta finalizada por hoy!'
-        : 'Entrega ${total == 0 ? 0 : (done + 1).clamp(1, total)} de $total';
-    final subtitle = route == null
-        ? 'Consulta y gestiona tus entregas asignadas.'
-        : finished
-        ? '$total entregas completadas'
-        : '$done de $total entregas completadas';
-    return Container(
-      height: 320,
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF1C1C1E), Color(0xFF2C2C2E)],
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _topBar(),
-          const Spacer(),
-          if (route != null) _routeDots(route),
-          if (route != null) const SizedBox(height: 16),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              color: Colors.white,
-              height: 1.1,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            subtitle,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: Colors.white.withAlpha(210),
-            ),
-          ),
-          const SizedBox(height: 14),
-          if (route != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                value: total == 0 ? 0 : done / total,
-                minHeight: 8,
-                backgroundColor: Colors.white.withAlpha(35),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppColors.yellow,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _topBar() => Row(
-    children: [
-      const CircleAvatar(
-        radius: 20,
-        backgroundColor: Color(0x33FFC107),
-        child: Icon(Icons.person_rounded, color: Colors.white),
-      ),
-      const SizedBox(width: 10),
-      const Expanded(
-        child: Text(
-          kAppName,
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-      IconButton(
-        tooltip: 'Actualizar',
-        onPressed: _controller.isBusy ? null : _controller.refresh,
-        icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-      ),
-    ],
-  );
-
-  Widget _routeDots(RutaDto route) {
-    final stops = route.paradas;
-    final show = stops.take(8).toList();
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final stop in show) ...[
-            _dot(stop),
-            if (stop != show.last)
-              Container(width: 18, height: 3, color: Colors.white24),
-          ],
-          if (stops.length > show.length)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Text(
-                '+${stops.length - show.length}',
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _dot(ParadaDto stop) {
-    final delivered = stop.pedido.estado == 'Entregado';
-    final active = stop.pedido.estado == 'EnCamino';
-    final color = delivered
-        ? AppColors.green
-        : active
-        ? AppColors.blue
-        : AppColors.yellow;
-    return Container(
-      width: 34,
-      height: 34,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: color.withAlpha(delivered || active ? 255 : 70),
-        shape: BoxShape.circle,
-        border: Border.all(color: color, width: 2),
-      ),
-      child: delivered
-          ? const Icon(Icons.check, size: 16, color: Colors.white)
-          : Text(
-              '${stop.orden}',
-              style: TextStyle(
-                color: active ? Colors.white : Colors.white,
-                fontWeight: FontWeight.w800,
-                fontSize: 13,
-              ),
-            ),
-    );
-  }
-
-  Widget _dateHeader() => Row(
-    children: [
-      Expanded(
-        child: Text(
-          'Hoy · ${_controller.selectedDate}',
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            color: AppColors.ink,
-          ),
-        ),
-      ),
-      SizedBox(
-        height: 48,
-        child: OutlinedButton.icon(
-          onPressed: _controller.isBusy ? null : _selectDate,
-          icon: const Icon(Icons.calendar_today_outlined, size: 18),
-          label: const Text('Cambiar'),
-        ),
-      ),
-    ],
-  );
-
-  Widget _routeContent() {
-    if (_controller.loadState == DriverLoadState.loading &&
-        _controller.route == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 64),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (_controller.loadState == DriverLoadState.empty) return _emptyRoute();
-    final route = _controller.route;
-    if (route == null) {
-      return _controller.loadState == DriverLoadState.error
-          ? _retry()
-          : const SizedBox.shrink();
-    }
-
-    final done = route.completedCount;
-    final total = route.paradas.length;
-    final finished = total > 0 && done == total;
-    final active = _activeStop(route);
-    final canStart =
-        route.estado == 'Planificada' &&
-        _controller.loadState == DriverLoadState.loaded &&
-        !_controller.isBusy &&
-        !_controller.uncertainMutation;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _kpis(route),
-        const SizedBox(height: 14),
-        _gpsStatusBar(),
-        const SizedBox(height: 14),
-        if (route.estado == 'Planificada')
-          _primaryButton(
-            icon: Icons.play_arrow_rounded,
-            label: route.paradas.isEmpty ? 'Sin paradas' : 'Iniciar ruta',
-            color: AppColors.blue,
-            onPressed: canStart && route.paradas.isNotEmpty
-                ? _startRoute
-                : null,
-          ),
-        if (route.estado == 'EnCurso' && active != null) ...[
-          _activeStopCard(active, route),
-          const SizedBox(height: 14),
-        ],
-        if (finished)
-          _finishedBanner(total)
-        else if (route.estado == 'EnCurso')
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              'Entrega ${done + 1} de $total en curso',
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: AppColors.ink,
-              ),
-            ),
-          ),
-        const SizedBox(height: 6),
-        ...route.paradas.map(
-          (stop) => _stopTile(stop, route, active?.pedido.id),
-        ),
-      ],
-    );
-  }
-
-  ParadaDto? _activeStop(RutaDto route) {
-    for (final stop in route.paradas) {
-      if (stop.pedido.estado != 'Entregado') return stop;
-    }
-    return null;
-  }
-
-  Widget _kpis(RutaDto route) => Row(
-    children: [
-      Expanded(
-        child: _kpi(
-          icon: Icons.inventory_2_outlined,
-          value: '${route.paradas.length}',
-          label: 'Paquetes',
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: _kpi(
-          icon: Icons.check_circle_outline,
-          value: '${route.completedCount}',
-          label: 'Completadas',
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: _kpi(
-          icon: Icons.route_outlined,
-          value: '${route.paradas.length - route.completedCount}',
-          label: 'Pendientes',
-        ),
-      ),
-    ],
-  );
-
-  Widget _kpi({
-    required IconData icon,
-    required String value,
-    required String label,
-  }) => Container(
-    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-    decoration: BoxDecoration(
-      color: AppColors.canvas,
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
-      children: [
-        Icon(icon, color: AppColors.ink, size: 20),
-        const SizedBox(height: 6),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w800,
-            color: AppColors.ink,
-          ),
-        ),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: AppColors.grey),
-        ),
-      ],
-    ),
-  );
-
-  Widget _primaryButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback? onPressed,
-  }) => SizedBox(
-    height: 52,
-    child: FilledButton.icon(
-      style: FilledButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-        textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-      ),
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-    ),
-  );
-
-  Widget _activeStopCard(ParadaDto stop, RutaDto route) {
+  /// Abre un chat de WhatsApp con el cliente, con un saludo ya escrito.
+  Future<void> _whatsapp(ParadaDto stop) async {
     final order = stop.pedido;
-    final canAct =
-        _controller.loadState == DriverLoadState.loaded &&
-        !_controller.isBusy &&
-        !_controller.uncertainMutation &&
-        route.estado == 'EnCurso';
-    final isEnCamino = order.estado == 'EnCamino';
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.canvas,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  color: AppColors.blue,
-                  shape: BoxShape.circle,
-                ),
-                child: Text(
-                  '${stop.orden}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isEnCamino ? 'Parada actual' : 'Siguiente parada',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.grey,
-                      ),
-                    ),
-                    Text(
-                      order.clienteNombre,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.ink,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              _statusChip(order.estado),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            order.direccion,
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: AppColors.ink,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${order.fechaEntrega} · ${order.horaEntrega}',
-            style: const TextStyle(fontSize: 13, color: AppColors.grey),
-          ),
-          if ((order.detalles ?? '').trim().isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(
-                    Icons.sticky_note_2_outlined,
-                    size: 18,
-                    color: AppColors.ink,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      order.detalles!.trim(),
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.ink,
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: OutlinedButton.icon(
-                    onPressed: order.clienteTelefono.isEmpty
-                        ? null
-                        : () => _call(order.clienteTelefono),
-                    icon: const Icon(Icons.phone_outlined),
-                    label: const Text('Llamar'),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _openMap(
-                      order.ubicacion.latitud,
-                      order.ubicacion.longitud,
-                    ),
-                    icon: const Icon(Icons.navigation_outlined),
-                    label: const Text('Navegar'),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          if (canAct && order.estado == 'AsignadoARuta')
-            _primaryButton(
-              icon: Icons.directions_walk_rounded,
-              label: 'En camino',
-              color: AppColors.blue,
-              onPressed: () => _controller.markEnCamino(order.id),
-            ),
-          if (canAct && order.estado == 'EnCamino')
-            _primaryButton(
-              icon: Icons.check_circle_outline,
-              label: 'Confirmar entrega',
-              color: AppColors.green,
-              onPressed: () => _confirmDelivery(stop),
-            ),
-        ],
+    final uri = whatsappUri(
+      order.clienteTelefono,
+      message:
+          'Hola ${order.clienteNombre}, soy tu repartidor de RutaExpress. Te escribo sobre tu entrega.',
+    );
+    if (uri == null) {
+      _snack('El teléfono de este cliente no sirve para WhatsApp.');
+      return;
+    }
+    try {
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        _snack('No se pudo abrir WhatsApp. ¿Está instalado?');
+      }
+    } on Exception {
+      _snack('No se pudo abrir WhatsApp. ¿Está instalado?');
+    }
+  }
+
+  /// Abre la ruta hasta esa parada en una pantalla propia (sin salir de la
+  /// app): camino por calles desde tu posición, distancia, tiempo e Iniciar.
+  void _openStopRoute(ParadaDto stop) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => StopRouteScreen(
+          stop: stop,
+          controller: _controller,
+          router: _router,
+          onCall: () => _call(stop.pedido.clienteTelefono),
+          onWhatsapp: () => _whatsapp(stop),
+        ),
       ),
     );
   }
 
   Future<void> _confirmDelivery(ParadaDto stop) async {
     final order = stop.pedido;
-    final items = (order.detalles ?? '')
-        .split(RegExp(r'[\n,]'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
+    final items = parseStopItems(order.detalles);
+    // Una casilla por artículo (o una general si no hay detalle). Se crea
+    // fuera del builder para que no se reinicie al abrir el teclado.
+    final checks = List<bool>.filled(items.isEmpty ? 1 : items.length, true);
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) {
-        final checks = List<bool>.filled(
-          items.isEmpty ? 1 : items.length,
-          true,
-        );
-        return StatefulBuilder(
-          builder: (context, setModalState) => SafeArea(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                20,
-                10,
-                20,
-                20 + MediaQuery.of(context).viewInsets.bottom,
-              ),
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              0,
+              20,
+              20 + MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: AppColors.border,
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'Confirmar entrega',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-                  ),
-                  const SizedBox(height: 4),
+                  const Text('Confirmar entrega', style: AppText.title),
+                  const SizedBox(height: 6),
                   Text(
                     '¿Confirmas la entrega a ${order.clienteNombre}?',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
+                    style: AppText.body.copyWith(
+                      fontWeight: FontWeight.w700,
                       color: AppColors.ink,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     'Parada ${stop.orden} · ${order.direccion}',
-                    style: const TextStyle(color: AppColors.grey),
+                    style: AppText.bodySmall.copyWith(color: AppColors.grey),
                   ),
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
                   if (items.isEmpty)
                     CheckboxListTile(
                       value: checks[0],
@@ -834,9 +309,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       title: const Text('Paquetes entregados al destinatario'),
                     )
                   else
-                    ...List.generate(
-                      items.length,
-                      (i) => CheckboxListTile(
+                    for (var i = 0; i < items.length; i++)
+                      CheckboxListTile(
                         value: checks[i],
                         onChanged: (v) =>
                             setModalState(() => checks[i] = v ?? false),
@@ -844,355 +318,720 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         contentPadding: EdgeInsets.zero,
                         title: Text(items[i]),
                       ),
-                    ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Verifica los paquetes y confirma la entrega.',
-                    style: TextStyle(fontSize: 13, color: AppColors.grey),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Marca cada paquete que entregaste.',
+                    style: AppText.bodySmall.copyWith(color: AppColors.grey),
                   ),
                   const SizedBox(height: 16),
-                  SizedBox(
-                    height: 52,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.green,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                      ),
-                      onPressed: checks.every((c) => c)
-                          ? () => Navigator.pop(context, true)
-                          : null,
-                      child: const Text(
-                        'Confirmar entrega',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
+                  PrimaryButton(
+                    label: 'Confirmar entrega',
+                    icon: Icons.check_circle_rounded,
+                    onPressed: checks.every((c) => c)
+                        ? () => Navigator.pop(context, true)
+                        : null,
                   ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    height: 48,
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Volver'),
-                    ),
+                  const SizedBox(height: 4),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Volver'),
                   ),
                 ],
               ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
     if (confirmed == true) await _controller.confirmDelivery(order.id);
   }
 
-  Widget _stopTile(ParadaDto stop, RutaDto route, String? activeId) {
-    final order = stop.pedido;
-    final isActive = order.id == activeId;
-    final delivered = order.estado == 'Entregado';
-    if (isActive && route.estado == 'EnCurso') return const SizedBox.shrink();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: delivered ? AppColors.greenSoft : AppColors.yellowSoft,
-              shape: BoxShape.circle,
-            ),
-            child: delivered
-                ? const Icon(Icons.check, size: 18, color: AppColors.green)
-                : Text(
-                    '${stop.orden}',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
+  // ------------------------------------------------------------------ estado
+
+  ParadaDto? _activeStop(RutaDto route) {
+    for (final stop in route.paradas) {
+      if (stop.pedido.estado != 'Entregado') return stop;
+    }
+    return null;
+  }
+
+  bool _canAct(RutaDto route) =>
+      _controller.loadState == DriverLoadState.loaded &&
+      !_controller.isBusy &&
+      !_controller.uncertainMutation &&
+      route.estado == 'EnCurso';
+
+  /// El botón fijo de abajo: siempre hay a lo sumo uno por estado.
+  _RouteAction? _actionFor(RutaDto? route) {
+    if (route == null) return null;
+    final busy = _controller.isBusy;
+    if (route.estado == 'Planificada') {
+      // Una ruta de mañana (o de un día que ya pasó) no se puede iniciar hoy.
+      final canStart =
+          _controller.loadState == DriverLoadState.loaded &&
+          !busy &&
+          !_controller.uncertainMutation &&
+          route.paradas.isNotEmpty &&
+          _controller.startBlockedReason == null;
+      return _RouteAction(
+        label: route.paradas.isEmpty ? 'Sin paradas' : 'Iniciar ruta',
+        icon: Icons.play_arrow_rounded,
+        onPressed: canStart ? _startRoute : null,
+        loading: busy,
+      );
+    }
+    final active = _activeStop(route);
+    if (route.estado != 'EnCurso' || active == null) return null;
+    final order = active.pedido;
+    if (order.estado == 'AsignadoARuta') {
+      return _RouteAction(
+        label: 'Voy en camino',
+        icon: Icons.directions_run_rounded,
+        onPressed: _canAct(route)
+            ? () => _controller.markEnCamino(order.id)
+            : null,
+        loading: busy,
+      );
+    }
+    if (order.estado == 'EnCamino') {
+      return _RouteAction(
+        label: 'Confirmar entrega',
+        icon: Icons.check_circle_rounded,
+        onPressed: _canAct(route) ? () => _confirmDelivery(active) : null,
+        loading: busy,
+      );
+    }
+    return null;
+  }
+
+  /// "Hoy · 2026-11-18", "Mañana · 2026-11-19", "Ayer · 2026-11-17" o solo la
+  /// fecha si es otro día.
+  String _dateLabel() {
+    final date = _controller.selectedDate;
+    final relative = relativeDayLabel(date, _controller.now);
+    return relative == null ? date : '$relative · $date';
+  }
+
+  // ------------------------------------------------------------------- build
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    builder: (context, _) {
+      final wide = MediaQuery.sizeOf(context).width >= kWideBreakpoint;
+      final route = _controller.route;
+      final action = _navIndex == 0 ? _actionFor(route) : null;
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        // Fondo claro: iconos oscuros en la barra de estado.
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+          statusBarBrightness: Brightness.light,
+        ),
+        child: Scaffold(
+          backgroundColor: AppColors.paper,
+          body: SafeArea(
+            bottom: false,
+            child: switch (_navIndex) {
+              1 => _mapTab(),
+              2 => _profile(),
+              _ => _routeTab(wide, action),
+            },
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  order.clienteNombre,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.ink,
+          bottomNavigationBar: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (action != null && !wide) _actionBar(action),
+              NavigationBar(
+                selectedIndex: _navIndex,
+                onDestinationSelected: (index) {
+                  setState(() => _navIndex = index);
+                  if (index == 2) unawaited(_settings.refresh());
+                },
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.route_outlined),
+                    selectedIcon: Icon(
+                      Icons.route_rounded,
+                      color: AppColors.brand,
+                    ),
+                    label: 'Ruta',
                   ),
+                  NavigationDestination(
+                    icon: Icon(Icons.map_outlined),
+                    selectedIcon: Icon(
+                      Icons.map_rounded,
+                      color: AppColors.brand,
+                    ),
+                    label: 'Mapa',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.person_outline_rounded),
+                    selectedIcon: Icon(
+                      Icons.person_rounded,
+                      color: AppColors.brand,
+                    ),
+                    label: 'Perfil',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+
+  /// Barra fija sobre la navegación: queda al alcance del pulgar.
+  Widget _actionBar(_RouteAction action) => DecoratedBox(
+    decoration: const BoxDecoration(
+      color: AppColors.surface,
+      border: Border(top: BorderSide(color: AppColors.border)),
+    ),
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppTheme.maxContentWidth),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+          child: PrimaryButton(
+            label: action.label,
+            icon: action.icon,
+            loading: action.loading,
+            onPressed: action.onPressed,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  /// Mapa global de la ruta: todas las paradas en un solo mapa.
+  Widget _mapTab() {
+    final route = _controller.route;
+    final hasStops = mapStopsOf(route).isNotEmpty;
+    if (!hasStops) {
+      return const EmptyState(
+        icon: Icons.map_outlined,
+        title: 'Sin paradas para mostrar',
+        message:
+            'Cuando tengas una ruta con paradas, las verás todas juntas aquí.',
+      );
+    }
+    return RouteMap(
+      // Un mapa por ruta: al cambiar de ruta se vuelve a encuadrar todo.
+      key: ValueKey(route?.id),
+      route: route,
+      router: _router,
+      myLocation: _controller.latestGpsSample,
+      gpsState: _controller.gpsState,
+      onEnableLocation: _controller.enableLocationPreview,
+      onOpenSettings: _controller.gps.openSettings,
+      onCall: (stop) => _call(stop.pedido.clienteTelefono),
+      onWhatsapp: _whatsapp,
+    );
+  }
+
+  Widget _routeTab(bool wide, _RouteAction? action) {
+    final route = _controller.route;
+    final done = route?.completedCount ?? 0;
+    final total = route?.paradas.length ?? 0;
+    final active = route == null ? null : _activeStop(route);
+    final inProgress = route?.estado == 'EnCurso';
+    _scrollToActive(wide ? null : (inProgress ? active : null));
+
+    final top = <Widget>[
+      RouteHeader(
+        dateLabel: _dateLabel(),
+        done: done,
+        total: total,
+        busy: _controller.isBusy,
+        onChangeDate: _selectDate,
+        onRefresh: _controller.refresh,
+      ),
+      const SizedBox(height: 14),
+      // Mientras el GPS está en reposo no hay nada que decir: se omite.
+      if (_controller.gpsState != GpsState.stopped) ...[
+        GpsStatus(
+          state: _controller.gpsState,
+          onOpenSettings: _controller.gps.openSettings,
+          onEnable: _controller.enableLocationPreview,
+        ),
+        const SizedBox(height: 14),
+      ],
+      if (_controller.realtimeError != null)
+        InlineNotice(
+          status: AppStatus.warning,
+          message: _controller.realtimeError!,
+          actionLabel: 'Reintentar',
+          onAction: _controller.retryRealtime,
+        ),
+      if (_controller.error != null)
+        InlineNotice(
+          status: AppStatus.error,
+          message: _controller.error!.message,
+          actionLabel: 'Actualizar',
+          onAction: _controller.refresh,
+        ),
+      // Ruta de otro día: se puede ver, pero no iniciar. Dice por qué y ofrece
+      // ir a la de hoy.
+      if (_controller.startBlockedReason != null)
+        InlineNotice(
+          status: AppStatus.warning,
+          message: _controller.startBlockedReason!,
+          actionLabel: 'Ir a hoy',
+          onAction: () => _controller.changeDate(_controller.now),
+        ),
+      if (_controller.uncertainMutation && _controller.error == null)
+        InlineNotice(
+          status: AppStatus.warning,
+          message: 'No pudimos confirmar el último cambio. Actualiza para ver cómo quedó.',
+          actionLabel: 'Actualizar',
+          onAction: _controller.refresh,
+        ),
+    ];
+
+    final Widget content;
+    if (_controller.loadState == DriverLoadState.loading && route == null) {
+      content = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 64),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    } else if (_controller.loadState == DriverLoadState.empty) {
+      content = EmptyState(
+        icon: Icons.inventory_2_outlined,
+        title: 'Sin entregas asignadas',
+        message: 'Cuando te asignen una ruta aparecerá aquí.',
+        actionLabel: 'Actualizar',
+        onAction: _controller.refresh,
+      );
+    } else if (route == null) {
+      content = _controller.loadState == DriverLoadState.error
+          ? EmptyState(
+              icon: Icons.cloud_off_rounded,
+              title: 'No pudimos cargar tu ruta',
+              message: 'Revisa tu conexión e inténtalo de nuevo.',
+              actionLabel: 'Reintentar',
+              onAction: _controller.refresh,
+            )
+          : const SizedBox.shrink();
+    } else if (wide) {
+      content = _wideRoute(route, active, inProgress, action);
+    } else {
+      content = _timeline(route, active, inProgress, compactActive: false);
+    }
+
+    return RefreshIndicator(
+      onRefresh: _controller.refresh,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: wide ? 1040 : AppTheme.maxContentWidth,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+              child: wide && route != null && content is! EmptyState
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [...top, content],
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [...top, content],
+                    ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Lleva la vista a la parada actual una vez por parada, para que al abrir
+  /// la ruta no haya que desplazarse para encontrarla.
+  void _scrollToActive(ParadaDto? active) {
+    final id = active?.pedido.id;
+    if (id == null || id == _scrolledTo) return;
+    _scrolledTo = id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final context = _activeKey.currentContext;
+      if (!mounted || context == null) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.02,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  /// La línea de ruta: todas las paradas unidas, con la actual expandida.
+  Widget _timeline(
+    RutaDto route,
+    ParadaDto? active,
+    bool inProgress, {
+    required bool compactActive,
+  }) {
+    final total = route.paradas.length;
+    final finished = total > 0 && route.completedCount == total;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (finished) _finishedBanner(total),
+        for (var i = 0; i < total; i++)
+          _timelineTile(
+            route,
+            route.paradas[i],
+            index: i,
+            total: total,
+            isActive: inProgress && route.paradas[i] == active,
+            compactActive: compactActive,
+          ),
+      ],
+    );
+  }
+
+  Widget _timelineTile(
+    RutaDto route,
+    ParadaDto stop, {
+    required int index,
+    required int total,
+    required bool isActive,
+    required bool compactActive,
+  }) {
+    final delivered = stop.pedido.estado == 'Entregado';
+    final status = delivered
+        ? AppStatus.done
+        : isActive
+        ? AppStatus.active
+        : AppStatus.pending;
+    return RouteNodeTile(
+      key: isActive && !compactActive ? _activeKey : null,
+      status: status,
+      number: stop.orden,
+      isFirst: index == 0,
+      isLast: index == total - 1,
+      child: isActive && !compactActive
+          ? CurrentStopCard(
+              stop: stop,
+              onCall: () => _call(stop.pedido.clienteTelefono),
+              onWhatsapp: () => _whatsapp(stop),
+              onShowMap: () => _openStopRoute(stop),
+            )
+          : StopRow(stop: stop),
+    );
+  }
+
+  /// Pantallas anchas: lista a la izquierda, parada actual y acción a la
+  /// derecha.
+  Widget _wideRoute(
+    RutaDto route,
+    ParadaDto? active,
+    bool inProgress,
+    _RouteAction? action,
+  ) {
+    final showActive = inProgress && active != null;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 5,
+          child: _timeline(route, active, inProgress, compactActive: true),
+        ),
+        const SizedBox(width: 28),
+        Expanded(
+          flex: 6,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (showActive)
+                CurrentStopCard(
+                  stop: active,
+                  onCall: () => _call(active.pedido.clienteTelefono),
+                  onWhatsapp: () => _whatsapp(active),
+                  onShowMap: () => _openStopRoute(active),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  order.direccion,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 13, color: AppColors.grey),
+              if (action != null) ...[
+                const SizedBox(height: 16),
+                PrimaryButton(
+                  label: action.label,
+                  icon: action.icon,
+                  loading: action.loading,
+                  onPressed: action.onPressed,
                 ),
               ],
-            ),
+            ],
           ),
-          _statusChip(order.estado),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   Widget _finishedBanner(int total) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
+    margin: const EdgeInsets.only(bottom: 16),
     padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: AppColors.greenSoft,
-      borderRadius: BorderRadius.circular(16),
+      color: AppColors.doneSoft,
+      borderRadius: BorderRadius.circular(20),
     ),
     child: Row(
       children: [
-        const Icon(Icons.celebration_outlined, color: AppColors.green),
-        const SizedBox(width: 10),
+        const Icon(Icons.check_circle_rounded, size: 32),
+        const SizedBox(width: 12),
         Expanded(
           child: Text(
-            '¡Ruta finalizada por hoy! $total entregas completadas.',
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
+            'Ruta completada: $total entregas',
+            style: AppText.headline.copyWith(color: AppColors.ink),
           ),
         ),
       ],
     ),
   );
 
-  Widget _statusChip(String state) {
-    final delivered = state == 'Entregado';
-    final enRoute = state == 'EnCamino';
-    final (color, bg, label) = delivered
-        ? (AppColors.green, AppColors.greenSoft, 'Completada')
-        : enRoute
-        ? (AppColors.blue, AppColors.blueSoft, 'En camino')
-        : (const Color(0xFF9A6B00), AppColors.yellowSoft, 'Pendiente');
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          color: color,
+  // ------------------------------------------------------------------ perfil
+
+  /// Configuración del teléfono: ubicación, ubicación precisa y notificaciones.
+  /// Cada ajuste dice cómo está y, si hace falta, tiene su botón para arreglarlo
+  /// sin salir a buscar en otra parte.
+  Widget _settingsSection() => AnimatedBuilder(
+    animation: _settings,
+    builder: (context, _) {
+      final st = _settings.state;
+
+      final SettingTile gps;
+      if (!st.loaded) {
+        gps = _tile(
+          icon: Icons.location_on_rounded,
+          title: 'Ubicación (GPS)',
+          description:
+              'Para ver tu posición y trazar el camino hasta el cliente.',
+          status: 'Comprobando…',
+          ok: true,
+        );
+      } else if (st.locationServiceOn == false) {
+        gps = _tile(
+          icon: Icons.location_off_rounded,
+          title: 'Ubicación (GPS)',
+          description:
+              'Para ver tu posición y trazar el camino hasta el cliente.',
+          status: 'Apagada en el teléfono',
+          ok: false,
+          button: 'Activar',
+          key: DeviceSettingsController.gps,
+          action: _settings.enableGps,
+        );
+      } else if (st.locationBlocked) {
+        gps = _tile(
+          icon: Icons.location_off_rounded,
+          title: 'Ubicación (GPS)',
+          description:
+              'Para ver tu posición y trazar el camino hasta el cliente.',
+          status: 'Bloqueada para la app',
+          ok: false,
+          button: 'Ajustes',
+          key: DeviceSettingsController.gps,
+          action: _settings.enableGps,
+        );
+      } else if (!st.hasLocationPermission) {
+        gps = _tile(
+          icon: Icons.location_off_rounded,
+          title: 'Ubicación (GPS)',
+          description:
+              'Para ver tu posición y trazar el camino hasta el cliente.',
+          status: 'Sin permiso',
+          ok: false,
+          button: 'Permitir',
+          key: DeviceSettingsController.gps,
+          action: _settings.enableGps,
+        );
+      } else {
+        gps = _tile(
+          icon: Icons.location_on_rounded,
+          title: 'Ubicación (GPS)',
+          description:
+              'Para ver tu posición y trazar el camino hasta el cliente.',
+          status: 'Activada',
+          ok: true,
+        );
+      }
+
+      const precisionTitle = 'Ubicación precisa';
+      const precisionText = 'Hace que el camino y la distancia sean exactos.';
+      final SettingTile precision;
+      if (!st.loaded) {
+        precision = _tile(
+          icon: Icons.my_location_rounded,
+          title: precisionTitle,
+          description: precisionText,
+          status: 'Comprobando…',
+          ok: true,
+        );
+      } else if (!st.hasLocationPermission) {
+        precision = _tile(
+          icon: Icons.my_location_rounded,
+          title: precisionTitle,
+          description: precisionText,
+          status: 'Requiere el permiso de ubicación',
+          ok: false,
+          button: st.locationBlocked ? 'Ajustes' : 'Permitir',
+          key: DeviceSettingsController.precision,
+          action: _settings.enablePrecision,
+        );
+      } else if (st.precision == LocationPrecision.approximate) {
+        precision = _tile(
+          icon: Icons.my_location_rounded,
+          title: precisionTitle,
+          description: precisionText,
+          status: 'Aproximada',
+          ok: false,
+          button: 'Activar',
+          key: DeviceSettingsController.precision,
+          action: _settings.enablePrecision,
+        );
+      } else if (st.precision == LocationPrecision.precise) {
+        precision = _tile(
+          icon: Icons.my_location_rounded,
+          title: precisionTitle,
+          description: precisionText,
+          status: 'Activada',
+          ok: true,
+        );
+      } else {
+        precision = _tile(
+          icon: Icons.my_location_rounded,
+          title: precisionTitle,
+          description: precisionText,
+          status: 'No disponible en este teléfono',
+          ok: true,
+        );
+      }
+
+      const notifTitle = 'Notificaciones';
+      const notifText = 'Avisos de la app en este teléfono.';
+      final SettingTile notifications = switch (st.notifications) {
+        NotificationsState.granted => _tile(
+          icon: Icons.notifications_active_rounded,
+          title: notifTitle,
+          description: notifText,
+          status: 'Activadas',
+          ok: true,
+        ),
+        NotificationsState.denied => _tile(
+          icon: Icons.notifications_off_rounded,
+          title: notifTitle,
+          description: notifText,
+          status: 'Desactivadas',
+          ok: false,
+          button: 'Activar',
+          key: DeviceSettingsController.notifications,
+          action: _settings.enableNotifications,
+        ),
+        NotificationsState.blocked => _tile(
+          icon: Icons.notifications_off_rounded,
+          title: notifTitle,
+          description: notifText,
+          status: 'Bloqueadas para la app',
+          ok: false,
+          button: 'Ajustes',
+          key: DeviceSettingsController.notifications,
+          action: _settings.enableNotifications,
+        ),
+        NotificationsState.unknown => _tile(
+          icon: Icons.notifications_none_rounded,
+          title: notifTitle,
+          description: notifText,
+          status: st.loaded ? 'No disponible' : 'Comprobando…',
+          ok: true,
+        ),
+      };
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Configuración', style: AppText.headline),
+          const SizedBox(height: 10),
+          SettingsCard(children: [gps, precision, notifications]),
+          const SizedBox(height: 10),
+          Text(
+            'Tu ubicación solo se comparte con la central mientras tu ruta está en curso.',
+            style: AppText.bodySmall.copyWith(color: AppColors.grey),
+          ),
+        ],
+      );
+    },
+  );
+
+  SettingTile _tile({
+    required IconData icon,
+    required String title,
+    required String description,
+    required String status,
+    required bool ok,
+    String? button,
+    String? key,
+    VoidCallback? action,
+  }) => SettingTile(
+    icon: icon,
+    title: title,
+    description: description,
+    statusLabel: status,
+    statusOk: ok,
+    buttonLabel: button,
+    onPressed: action,
+    loading: key != null && _settings.busy.contains(key),
+  );
+
+  Widget _profile() {
+    final name = widget.auth?.user?.nombreUsuario ?? 'Repartidor';
+    final initial = name.trim().isEmpty ? 'R' : name.trim()[0].toUpperCase();
+    return SingleChildScrollView(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppTheme.maxContentWidth),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Perfil', style: AppText.title),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 32,
+                      backgroundColor: AppColors.brand,
+                      child: Text(
+                        initial,
+                        style: AppText.title.copyWith(color: Colors.white),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name, style: AppText.headline),
+                          Text(
+                            'Repartidor',
+                            style: AppText.body.copyWith(color: AppColors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                _settingsSection(),
+                const SizedBox(height: 24),
+                OutlinedButton.icon(
+                  onPressed: _controller.isBusy ? null : _logout,
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Cerrar sesión'),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
-
-  Widget _gpsStatusBar() {
-    final state = _controller.gpsState;
-    final active = state == GpsState.active;
-    final attention =
-        state == GpsState.serviceDisabled ||
-        state == GpsState.permissionDenied ||
-        state == GpsState.permissionDeniedForever ||
-        state == GpsState.unavailable;
-    final label = switch (state) {
-      GpsState.active => 'Seguimiento de ubicación activo',
-      GpsState.waitingForSample => 'Esperando ubicación válida…',
-      GpsState.serviceDisabled => 'Ubicación del teléfono apagada',
-      GpsState.permissionDenied => 'Permiso de ubicación denegado',
-      GpsState.permissionDeniedForever => 'Permiso bloqueado: revisa Ajustes',
-      GpsState.accuracyInsufficient => 'Precisión insuficiente',
-      GpsState.unavailable => 'GPS no disponible',
-      _ => 'GPS listo al iniciar la ruta',
-    };
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: attention ? AppColors.orangeSoft : AppColors.canvas,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            active ? Icons.gps_fixed : Icons.gps_not_fixed,
-            color: active ? AppColors.green : AppColors.orange,
-            size: 20,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.ink,
-              ),
-            ),
-          ),
-          if (state == GpsState.serviceDisabled ||
-              state == GpsState.permissionDeniedForever)
-            SizedBox(
-              height: 48,
-              child: TextButton(
-                onPressed: _controller.gps.openSettings,
-                child: const Text('Ajustes'),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _emptyRoute() => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 48),
-    child: Center(
-      child: Column(
-        children: [
-          const Icon(Icons.route_outlined, size: 54, color: AppColors.grey),
-          const SizedBox(height: 14),
-          const Text(
-            'Sin entregas asignadas',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Vuelve más tarde o actualiza.',
-            style: TextStyle(color: AppColors.grey),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 48,
-            child: OutlinedButton.icon(
-              onPressed: _controller.refresh,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Actualizar'),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _retry() => Center(
-    child: Padding(
-      padding: const EdgeInsets.symmetric(vertical: 40),
-      child: SizedBox(
-        height: 48,
-        child: FilledButton.icon(
-          onPressed: _controller.refresh,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Reintentar'),
-        ),
-      ),
-    ),
-  );
-
-  Widget _errorCard(ApiException exception) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFFEBEE),
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Icon(Icons.error_outline, color: Colors.red),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            exception.message,
-            style: const TextStyle(color: Color(0xFF8B1E2D)),
-          ),
-        ),
-        IconButton(
-          onPressed: _controller.refresh,
-          icon: const Icon(Icons.refresh),
-        ),
-      ],
-    ),
-  );
-
-  Widget _warning(String value) => Container(
-    margin: const EdgeInsets.only(bottom: 12),
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: AppColors.orangeSoft,
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.sync_problem_outlined, color: AppColors.orange),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
-        SizedBox(
-          height: 48,
-          child: IconButton(
-            tooltip: 'Reintentar tiempo real',
-            onPressed: _controller.retryRealtime,
-            icon: const Icon(Icons.sync),
-          ),
-        ),
-      ],
-    ),
-  );
-
-  Widget _profile() => ListView(
-    padding: const EdgeInsets.all(20),
-    children: [
-      const SizedBox(height: 16),
-      const CircleAvatar(
-        radius: 36,
-        backgroundColor: AppColors.yellowSoft,
-        child: Icon(Icons.person_rounded, size: 38, color: AppColors.ink),
-      ),
-      const SizedBox(height: 16),
-      const Center(
-        child: Text(
-          'Configuración',
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
-        ),
-      ),
-      const SizedBox(height: 8),
-      Center(
-        child: Text(
-          _controller.driverId,
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: AppColors.grey),
-        ),
-      ),
-      const SizedBox(height: 24),
-      const Text(
-        'La ubicación se captura durante la ruta activa. Si el backend expone un endpoint compatible, la app enviará muestras autenticadas para el seguimiento operativo.',
-        style: TextStyle(color: AppColors.grey, height: 1.5),
-      ),
-      const SizedBox(height: 24),
-      SizedBox(
-        height: 48,
-        child: OutlinedButton.icon(
-          onPressed: _controller.isBusy ? null : _logout,
-          icon: const Icon(Icons.logout),
-          label: const Text('Cerrar sesión'),
-        ),
-      ),
-    ],
-  );
 }

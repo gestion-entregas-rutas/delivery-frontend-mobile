@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../auth/auth_controller.dart';
-import 'home_screen.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_text.dart';
+import '../widgets/auth_shell.dart';
+import '../widgets/primary_button.dart';
+import '../widgets/route/inline_notice.dart';
+import '../widgets/status_chip.dart';
 
 class ChangeCredentialsScreen extends StatefulWidget {
   const ChangeCredentialsScreen({super.key, required this.auth});
@@ -93,146 +98,110 @@ class _ChangeCredentialsScreenState extends State<ChangeCredentialsScreen> {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.auth,
-    builder: (context, _) => Scaffold(
-      backgroundColor: AppColors.yellow,
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 520),
-              child: Card(
-                elevation: 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(28),
+    builder: (context, _) {
+      final saving = widget.auth.status == AuthStatus.changingCredentials;
+      return AuthShell(
+        showRoute: false,
+        tagline: 'Un paso más y empiezas.',
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: AppColors.brandSoft,
+                  shape: BoxShape.circle,
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(28),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(
-                          Icons.lock_reset_rounded,
-                          size: 44,
-                          color: AppColors.ink,
-                        ),
-                        const SizedBox(height: 18),
-                        const Text(
-                          'Cambia tus credenciales',
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.ink,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          'Tu cuenta tiene una clave temporal. Debes actualizarla antes de consultar la ruta.',
-                          style: TextStyle(color: AppColors.grey, height: 1.45),
-                        ),
-                        const SizedBox(height: 24),
-                        TextFormField(
-                          controller: _current,
-                          obscureText: true,
-                          enabled:
-                              widget.auth.status !=
-                              AuthStatus.changingCredentials,
-                          decoration: const InputDecoration(
-                            labelText: 'Clave actual',
-                            prefixIcon: Icon(Icons.lock_outline),
-                          ),
-                          validator: (value) => value == null || value.isEmpty
-                              ? 'Ingresa tu clave actual'
-                              : null,
-                        ),
-                        const SizedBox(height: 14),
-                        TextFormField(
-                          controller: _username,
-                          enabled:
-                              widget.auth.status !=
-                              AuthStatus.changingCredentials,
-                          decoration: const InputDecoration(
-                            labelText: 'Nuevo nombre de usuario',
-                            prefixIcon: Icon(Icons.person_outline),
-                          ),
-                          validator: (value) =>
-                              value == null ||
-                                  value.trim().length < 3 ||
-                                  value.trim().length > 100
-                              ? 'Usa entre 3 y 100 caracteres'
-                              : null,
-                        ),
-                        const SizedBox(height: 14),
-                        TextFormField(
-                          controller: _newPassword,
-                          obscureText: _obscure,
-                          enabled:
-                              widget.auth.status !=
-                              AuthStatus.changingCredentials,
-                          decoration: InputDecoration(
-                            labelText: 'Nueva clave',
-                            prefixIcon: const Icon(Icons.key_outlined),
-                            suffixIcon: IconButton(
-                              onPressed: () =>
-                                  setState(() => _obscure = !_obscure),
-                              icon: Icon(
-                                _obscure
-                                    ? Icons.visibility_off_outlined
-                                    : Icons.visibility_outlined,
-                              ),
-                            ),
-                          ),
-                          validator: _passwordError,
-                        ),
-                        const SizedBox(height: 22),
-                        SizedBox(
-                          width: double.infinity,
-                          height: 52,
-                          child: FilledButton(
-                            onPressed:
-                                widget.auth.status ==
-                                    AuthStatus.changingCredentials
-                                ? null
-                                : _submit,
-                            child:
-                                widget.auth.status ==
-                                    AuthStatus.changingCredentials
-                                ? const CircularProgressIndicator()
-                                : const Text('Guardar y continuar'),
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Center(
-                          child: TextButton.icon(
-                            onPressed:
-                                widget.auth.status ==
-                                    AuthStatus.changingCredentials
-                                ? null
-                                : _logout,
-                            icon: const Icon(Icons.logout_rounded),
-                            label: const Text(
-                              'Cerrar sesión y usar otra cuenta',
-                            ),
-                          ),
-                        ),
-                        if (widget.auth.error != null) ...[
-                          const SizedBox(height: 14),
-                          Text(
-                            widget.auth.error!.message,
-                            style: const TextStyle(color: Colors.red),
-                          ),
-                        ],
-                      ],
+                child: const Icon(
+                  Icons.lock_reset_rounded,
+                  size: 30,
+                  color: AppColors.brand,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Crea tu clave nueva', style: AppText.title),
+              const SizedBox(height: 8),
+              Text(
+                'Tu cuenta tiene una clave temporal. Cámbiala para ver tu ruta.',
+                style: AppText.body.copyWith(color: AppColors.grey),
+              ),
+              const SizedBox(height: 24),
+              TextFormField(
+                controller: _current,
+                obscureText: true,
+                enabled: !saving,
+                decoration: const InputDecoration(
+                  labelText: 'Clave actual',
+                  prefixIcon: Icon(Icons.lock_outline_rounded, size: 22),
+                ),
+                validator: (value) => value == null || value.isEmpty
+                    ? 'Ingresa tu clave actual'
+                    : null,
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _username,
+                enabled: !saving,
+                decoration: const InputDecoration(
+                  labelText: 'Nuevo nombre de usuario',
+                  prefixIcon: Icon(Icons.person_outline_rounded, size: 22),
+                ),
+                validator: (value) =>
+                    value == null ||
+                        value.trim().length < 3 ||
+                        value.trim().length > 100
+                    ? 'Usa entre 3 y 100 caracteres'
+                    : null,
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: _newPassword,
+                obscureText: _obscure,
+                enabled: !saving,
+                decoration: InputDecoration(
+                  labelText: 'Nueva clave',
+                  helperText: '12 o más caracteres, con mayúscula, minúscula, número y símbolo',
+                  helperMaxLines: 2,
+                  prefixIcon: const Icon(Icons.key_outlined, size: 22),
+                  suffixIcon: IconButton(
+                    tooltip: _obscure ? 'Mostrar clave' : 'Ocultar clave',
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                    icon: Icon(
+                      _obscure
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
                     ),
                   ),
                 ),
+                validator: _passwordError,
               ),
-            ),
+              if (widget.auth.error != null) ...[
+                const SizedBox(height: 16),
+                InlineNotice(
+                  status: AppStatus.error,
+                  message: widget.auth.error!.message,
+                ),
+              ],
+              const SizedBox(height: 24),
+              PrimaryButton(
+                label: 'Guardar y continuar',
+                loading: saving,
+                onPressed: _submit,
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: saving ? null : _logout,
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Cerrar sesión y usar otra cuenta'),
+              ),
+            ],
           ),
         ),
-      ),
-    ),
+      );
+    },
   );
 }

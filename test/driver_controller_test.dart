@@ -97,6 +97,33 @@ class _Repo extends LogisticaRepository {
 }
 
 void main() {
+  test(
+    'CP-ERR-02: una entrega con 500 se reconcilia y admite un reintento',
+    () async {
+      final repo = _Repo(_route(state: 'EnCurso', orderState: 'EnCamino'))
+        ..mutationError = const ApiException(
+          statusCode: 500,
+          message: 'Error de prueba',
+        );
+      final controller = DriverController(
+        repository: repo,
+        initialDate: DateTime(2026, 10, 17),
+        driverId: 'driver-1',
+        seguimiento: SeguimientoService(hubUrl: 'http://localhost:5289'),
+        gps: GpsService(gateway: _Gateway()),
+      );
+      await controller.refresh();
+      await controller.confirmDelivery('order-1');
+      expect(controller.error?.statusCode, 500);
+      expect(controller.isBusy, isFalse);
+      expect(controller.route?.paradas.single.pedido.estado, 'EnCamino');
+      repo.mutationError = null;
+      await controller.confirmDelivery('order-1');
+      expect(controller.route?.paradas.single.pedido.estado, 'Entregado');
+      await controller.logout();
+    },
+  );
+
   test('Controller uses server states and serializes route actions', () async {
     final repository = _Repo(_route());
     final controller = DriverController(
@@ -105,6 +132,7 @@ void main() {
       seguimiento: SeguimientoService(hubUrl: 'http://localhost:5289'),
       gps: GpsService(gateway: _Gateway()),
       initialDate: DateTime(2026, 10, 17, 23, 55),
+      clock: () => DateTime(2026, 10, 17, 23, 55),
     );
     expect(controller.selectedDate, '2026-10-17');
     await controller.refresh();
