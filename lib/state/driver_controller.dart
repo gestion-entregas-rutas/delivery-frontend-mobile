@@ -8,6 +8,7 @@ import '../data/api/logistica_repository.dart';
 import '../location/gps_service.dart';
 import '../models/logistica_models.dart';
 import '../realtime/seguimiento_service.dart';
+import '../utils/route_day.dart' as day;
 
 enum DriverLoadState { idle, loading, loaded, empty, error }
 
@@ -20,7 +21,9 @@ class DriverController extends ChangeNotifier {
     DateTime? initialDate,
     this.closeApiClient = false,
     this.validateSession,
-  }) : seguimiento =
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now,
+       seguimiento =
            seguimiento ??
            _defaultSeguimiento(
              repository.api.baseUrl,
@@ -43,6 +46,24 @@ class DriverController extends ChangeNotifier {
   final GpsService gps;
   final bool closeApiClient;
   final Future<bool> Function()? validateSession;
+
+  /// Reloj del teléfono; se puede cambiar en pruebas.
+  final DateTime Function() _clock;
+
+  /// Ahora, según el reloj del controlador.
+  DateTime get now => _clock();
+
+  /// Por qué la ruta actual NO se puede iniciar hoy (por ejemplo, es de
+  /// mañana); `null` si no hay ruta por iniciar o sí se puede.
+  ///
+  /// Es un control de la app para no dejar hacer algo que no corresponde. La
+  /// decisión final sigue siendo del servidor (AGENTS.md, regla 3).
+  String? get startBlockedReason {
+    final current = route;
+    if (current == null || current.estado != 'Planificada') return null;
+    return day.startBlockedReason(current.fecha, now);
+  }
+
   String selectedDate;
   RutaDto? route;
   DriverLoadState loadState = DriverLoadState.idle;
@@ -66,7 +87,13 @@ class DriverController extends ChangeNotifier {
   DateTime? _lastLocationSampleAtUtc;
   bool _sendingLocation = false;
 
-  Future<void> initialize() async {
+  Future<void>? _initFuture;
+
+  /// Idempotente: la puede llamar quien precarga la ruta (el splash) y luego
+  /// la pantalla principal sin duplicar la conexión ni la consulta.
+  Future<void> initialize() => _initFuture ??= _initialize();
+
+  Future<void> _initialize() async {
     if (_disposed) return;
     seguimiento.setRoute(null, const <String>[]);
     if (validateSession != null && !await validateSession!()) return;
@@ -169,6 +196,10 @@ class DriverController extends ChangeNotifier {
     if (current.estado != 'Planificada' || current.paradas.isEmpty) {
       throw const ApiException(message: 'La ruta no está lista para iniciar.');
     }
+    // Una ruta de otro día no se inicia: ni se pide el GPS ni se llama al
+    // servidor.
+    final blocked = day.startBlockedReason(current.fecha, now);
+    if (blocked != null) throw ApiException(message: blocked);
     await gps.checkReadiness();
     // GPS preparation is visible to the driver, but does not block the
     // REST delivery workflow while the backend location contract is pending.
@@ -293,16 +324,19 @@ class DriverController extends ChangeNotifier {
       route?.fecha == selectedDate &&
       _mutationGeneration == _generation;
 
+  void _handleGpsSample(GpsSample sample, int generation) {
+    if (latestGpsSample == null ||
+        sample.capturedAtUtc.isAfter(latestGpsSample!.capturedAtUtc)) {
+      latestGpsSample = sample;
+      _notify();
+    }
+    // Solo se envía al servidor con la ruta en curso (ver _reportLocation).
+    unawaited(_reportLocation(sample, generation));
+  }
+
   Future<void> _startLocalGps() async {
     final generation = _generation;
-    gps.onSample = (sample) {
-      if (latestGpsSample == null ||
-          sample.capturedAtUtc.isAfter(latestGpsSample!.capturedAtUtc)) {
-        latestGpsSample = sample;
-        _notify();
-      }
-      unawaited(_reportLocation(sample, generation));
-    };
+    gps.onSample = (sample) => _handleGpsSample(sample, generation);
     gpsState = await gps.start();
     if (_disposed ||
         !_foreground ||
@@ -311,6 +345,34 @@ class DriverController extends ChangeNotifier {
       await gps.stop();
       return;
     }
+    _notify();
+  }
+
+  /// Enciende el GPS para VER tu posición en el mapa y en la ruta a una
+  /// parada, aunque la ruta aún no esté iniciada. Pide el permiso de ubicación
+  /// si hace falta.
+  ///
+  /// La posición se usa solo en el teléfono: no se envía al servidor mientras
+  /// la ruta no esté en curso (la regla está en [_reportLocation]). No cambia
+  /// ningún estado de la ruta ni de las entregas.
+  Future<void> enableLocationPreview() async {
+    if (_disposed || !_foreground) return;
+    final generation = _generation;
+    gps.onSample = (sample) => _handleGpsSample(sample, generation);
+    gpsState = await gps.start();
+    if (_disposed || generation != _generation) return;
+    _notify();
+  }
+
+  /// Apaga el GPS que se encendió solo para ver la posición, salvo que la ruta
+  /// esté en curso (entonces el GPS es parte del seguimiento y se queda).
+  Future<void> releaseLocationPreview() async {
+    if (_disposed) return;
+    if (route?.estado == 'EnCurso') return;
+    await gps.stop();
+    // Sin GPS encendido la posición guardada ya no es la actual.
+    if (_disposed) return;
+    latestGpsSample = null;
     _notify();
   }
 

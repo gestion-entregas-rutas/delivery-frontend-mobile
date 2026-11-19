@@ -93,32 +93,50 @@ DriverController create(Repo repo, {Realtime? hub, Gps? gps}) =>
       seguimiento: hub ?? Realtime(),
       gps: gps ?? Gps(),
       initialDate: DateTime(2026, 10, 17),
+      clock: () => DateTime(2026, 10, 17, 9),
     );
 void main() {
-  testWidgets('CP-PED-06: la parada muestra los datos de entrega y los productos', (tester) async {
-    final repo = Repo()..current = sample(detalles: '2 × Vela, 1 × Jabón');
-    final controller = create(repo);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: HomeScreen(repository: repo, driverId: 'd', controller: controller),
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
-    for (final dato in [
-      'Cliente',
-      'Dirección',
-      '2026-10-17',
-      '09:00:00',
-      '2 × Vela, 1 × Jabón',
-      '099',
-      '-1.000000, -2.000000',
-    ]) {
-      expect(find.textContaining(dato), findsWidgets, reason: 'Dato visible: $dato');
-    }
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-  });
+  testWidgets(
+    'CP-PED-06: la parada muestra los datos de entrega y los productos',
+    (tester) async {
+      final repo = Repo()..current = sample(detalles: '2 × Vela, 1 × Jabón');
+      final controller = create(repo);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomeScreen(
+            repository: repo,
+            driverId: 'd',
+            controller: controller,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      for (final dato in [
+        'Cliente',
+        'Dirección',
+        // Fecha, hora y teléfono van en campos separados, con su etiqueta.
+        'Fecha',
+        '2026-10-17',
+        'Hora',
+        '09:00',
+        'Teléfono',
+        // Cada artículo en su propia línea; las coordenadas ya no se muestran
+        // (el repartidor ve la parada en el mapa de la app).
+        '2 × Vela',
+        '1 × Jabón',
+        '099',
+      ]) {
+        expect(
+          find.textContaining(dato),
+          findsWidgets,
+          reason: 'Dato visible: $dato',
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    },
+  );
   test('A stale GET cannot overwrite a newer date', () async {
     final repo = Repo();
     final first = Completer<RutaDto?>();

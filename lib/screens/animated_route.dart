@@ -74,7 +74,7 @@ class _RoutePainter extends CustomPainter {
         ..strokeWidth = 22,
     );
     final line = Paint()
-      ..color = AppColors.ink
+      ..color = Colors.white
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round;
@@ -83,7 +83,7 @@ class _RoutePainter extends CustomPainter {
     }
     for (final point in [const Offset(40, 238), const Offset(350, 62)]) {
       canvas.drawCircle(point, 12, Paint()..color = Colors.white);
-      canvas.drawCircle(point, 5, Paint()..color = AppColors.ink);
+      canvas.drawCircle(point, 5, Paint()..color = AppColors.brand);
     }
     final t = motion.value;
     final alpha = math.min(1.0, math.min(t * 12, (1 - t) * 12));
@@ -99,7 +99,7 @@ class _RoutePainter extends CustomPainter {
         style: TextStyle(
           fontSize: 26,
           fontFamily: Icons.local_shipping_rounded.fontFamily,
-          color: AppColors.ink.withValues(alpha: alpha),
+          color: AppColors.brand.withValues(alpha: alpha),
         ),
       ),
       textDirection: TextDirection.ltr,

@@ -7,7 +7,7 @@ import 'auth/auth_controller.dart';
 import 'config/api_config.dart';
 import 'data/api/api_client.dart';
 
-import 'screens/home_screen.dart' show AppColors;
+import 'theme/app_theme.dart';
 import 'screens/session_gate.dart';
 
 void main() {
@@ -16,12 +16,12 @@ void main() {
   // App del repartidor: solo vertical.
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Barra de estado transparente con iconos oscuros (el fondo es claro/amarillo).
+  // Barra de estado transparente con iconos claros (arriba hay morado de marca).
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.dark, // Android
-      statusBarBrightness: Brightness.light, // iOS
+      statusBarIconBrightness: Brightness.light, // Android
+      statusBarBrightness: Brightness.dark, // iOS
     ),
   );
 
@@ -63,18 +63,9 @@ class _LogisticsAppState extends State<LogisticsApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Logistics App',
+      title: 'RutaExpress',
       debugShowCheckedModeBanner: false, // Oculta el banner de "DEBUG"
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.yellow,
-          primary: AppColors.yellow,
-          onPrimary: AppColors.ink,
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: Colors.white,
-      ),
+      theme: AppTheme.light(),
       home: SessionGate(auth: auth),
     );
   }

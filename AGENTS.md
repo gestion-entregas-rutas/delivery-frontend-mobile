@@ -7,8 +7,8 @@ Con el nuevo enfoque E-Commerce, los clientes compran en la tienda web (`fronten
 Tu misión es **mantener intacto el flujo operacional aprobado**, integrar la visualización de los artículos comprados en cada parada y cerrar los pendientes críticos de pruebas y GPS documentados en `MOVIL-FRONTEND.md`[cite: 11].
 
 ## 2. Reglas Inquebrantables
-1. **Conservar diseño e identidad:** Mantener la paleta amarillo/negro de RutaExpress, el flujo de Splash -> Login -> Cambio de credenciales temporales -> Ruta asignada -> Iniciar reparto -> En camino -> Entregado[cite: 6, 7, 11].
-2. **Cero APIs externas de ruteo:** No integrar Google Directions ni servicios externos de cálculo de rutas; el orden de paradas proviene 100% del algoritmo propio del backend[cite: 11].
+1. **Conservar diseño e identidad:** Mantener la identidad morada de RutaExpress (el morado sale de la animación del splash) y el flujo de Splash -> Login -> Cambio de credenciales temporales -> Ruta asignada -> Iniciar reparto -> En camino -> Entregado[cite: 6, 7, 11]. Los colores, la tipografía y los componentes viven en `lib/theme/` y `lib/widgets/`: úsalos en lugar de repetir colores o tamaños en línea. Significado fijo de color: morado = lo que puedes hacer o está activo, morado profundo con check = hecho, ámbar = atención, rojo = error. Cada estado de la pantalla de ruta tiene un solo botón principal, fijo abajo.
+2. **Cero APIs externas de ruteo (con una excepción acotada):** No integrar Google Directions ni servicios externos de cálculo de rutas para decidir el orden de las paradas: el orden proviene 100% del algoritmo propio del backend[cite: 11]. Excepción autorizada por el responsable del proyecto: la app puede pedir al servidor público de OSRM (`router.project-osrm.org`, `lib/data/routing/road_router.dart`) únicamente el trazado por calles, la distancia y el tiempo entre puntos YA ordenados, para dibujarlos en el mapa (pestaña Mapa y pantalla de ruta a una parada). OSRM nunca reordena, elige ni descarta paradas; si falla, la app dibuja líneas rectas. Límites a tener presentes: es un servidor de demostración sin garantías y recibe las coordenadas de las paradas y del repartidor; para producción apunta `OsrmRoadRouter.baseUrl` a un OSRM propio. El mapa usa teselas de OpenStreetMap, cuyo servidor público tampoco es para uso intensivo. Nunca abrir Google Maps ni otras apps de mapas para navegar.
 3. **El backend tiene la autoridad:** Nunca permitir que la app decida por sí sola iniciar rutas o cambiar estados sin confirmación HTTP exitosa del servidor[cite: 11].
 
 ## 3. Tareas Específicas a Realizar
@@ -24,5 +24,5 @@ Tu misión es **mantener intacto el flujo operacional aprobado**, integrar la vi
 
 ## 4. Verificación antes de finalizar
 Ejecutar obligatoriamente[cite: 11]:
-1. `flutter analyze` (debe terminar con 0 issues)[cite: 11].
+1. `flutter analyze` (debe terminar con 0 issues)[cite: 11]. Si la ruta del proyecto tiene caracteres no ASCII (por ejemplo `GESTIÓN`), `flutter analyze` directo falla con `FormatException`; usa `powershell -File tool/analyze.ps1`, que lo corre desde una unidad virtual.
 2. `flutter test` (todas las pruebas deben aprobar)[cite: 11].

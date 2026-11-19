@@ -9,9 +9,12 @@ import 'package:frontend_mobile/auth/session_store.dart';
 import 'package:frontend_mobile/data/api/api_client.dart';
 import 'package:frontend_mobile/screens/session_gate.dart';
 import 'package:frontend_mobile/screens/login_screen.dart';
+import 'package:frontend_mobile/screens/rive_delivery.dart';
 import 'package:frontend_mobile/screens/change_credentials_screen.dart';
 
 void main() {
+  setUpAll(() => RiveDelivery.enabled = false);
+
   testWidgets(
     'Temporary session shows credential policy and never opens operational resources',
     (tester) async {
@@ -47,6 +50,9 @@ void main() {
       auth = AuthController(api: api, store: MemorySessionStore());
       await auth.login(username: 'driver', password: 'test');
       await tester.pumpWidget(MaterialApp(home: SessionGate(auth: auth)));
+      // El gate muestra el splash completo antes de abrir la pantalla.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump();
       expect(find.byType(ChangeCredentialsScreen), findsOneWidget);
       expect(find.byType(LoginScreen), findsNothing);
       await tester.enterText(
